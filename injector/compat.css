@@ -1,0 +1,40 @@
+/**
+ * compat.css
+ * CSS patches for layouts that relied on IE quirks.
+ * Only adds properties — never changes visual intent.
+ */
+
+/* IE used zoom:1 to trigger hasLayout on block elements */
+body {
+  zoom: 1;
+}
+
+/* IE defaulted tables to collapse; some layouts relied on it */
+table {
+  border-collapse: collapse;
+}
+
+/* IE treated inline elements as blocks in certain contexts */
+img, input, select, textarea {
+  vertical-align: middle;
+}
+
+/* IE box-model fix: border/padding inside width */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+/* IE showed scrollbar always; some layouts assumed the extra width */
+html {
+  overflow-y: scroll;
+}
+
+/* IE rendered fieldset content differently */
+fieldset {
+  min-width: 0;
+}
+
+/* IE default list-style differed */
+ul, ol {
+  list-style-position: inside;
+}
