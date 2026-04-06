@@ -108,6 +108,102 @@
     }
   }());
 
+  // ── document.all.tags / document.all.item ────────────────────────────────────
+  // IE's HTMLAllCollection had .tags(tagName) and multi-index .item(id, n).
+  // Chrome's HTMLAllCollection lacks .tags() entirely.
+  // _toolbar.js calls document.all.tags("SELECT") inside showElement/hideElement.
+  // Without this polyfill, doMenu() throws and submenus never open.
+  (function patchDocumentAllTags() {
+    try {
+      if (typeof HTMLAllCollection !== 'undefined') {
+        if (!HTMLAllCollection.prototype.tags) {
+          HTMLAllCollection.prototype.tags = function (tagName) {
+            return document.getElementsByTagName(tagName);
+          };
+        }
+        // .item(id, subIndex): IE returns the nth element matching that id/name.
+        var _origItem = HTMLAllCollection.prototype.item;
+        if (_origItem) {
+          HTMLAllCollection.prototype.item = function (nameOrIdx, subIdx) {
+            if (subIdx === undefined || subIdx === null) {
+              return _origItem.call(this, nameOrIdx);
+            }
+            var matches = document.querySelectorAll(
+              '[id="' + nameOrIdx + '"],[name="' + nameOrIdx + '"]'
+            );
+            return matches[subIdx] || null;
+          };
+        }
+      }
+    } catch (_) {}
+  }());
+
+  // ── IE element-ID global variable fix ────────────────────────────────────────
+  // IE automatically exposes element IDs as window globals.
+  // When a script declares  var StartMenu;  (undefined), Chrome's named-access
+  // for the element with id="StartMenu" is shadowed by the var declaration.
+  //
+  // Classic ASP toolbar pattern:
+  //   var StartMenu;                       ← declares undefined window.StartMenu
+  //   document.write("<SPAN ID='StartMenu'...");  ← element exists in DOM
+  //   var ToolbarMenu = StartMenu;         ← StartMenu still undefined!
+  //   → doMenu(): ToolbarMenu == null → return false → submenus never open
+  //
+  // Fix: on DOMContentLoaded, assign any window var that is null/undefined AND
+  // has a matching element ID.  Also explicitly re-fix ToolbarMenu.
+  document.addEventListener('DOMContentLoaded', function fixElementIdGlobals() {
+    try {
+      var allEls = document.querySelectorAll('[id]');
+      for (var i = 0; i < allEls.length; i++) {
+        var eid = allEls[i].id;
+        if (eid && /^\w+$/.test(eid) && window[eid] == null) {
+          try { window[eid] = allEls[i]; } catch (_) {}
+        }
+      }
+      // ToolbarMenu was set to StartMenu *before* the element existed.
+      // Re-assign now that StartMenu is fixed above.
+      if (typeof window.ToolbarMenu !== 'undefined' && window.ToolbarMenu == null) {
+        var sm = document.getElementById('StartMenu');
+        if (sm) window.ToolbarMenu = sm;
+      }
+    } catch (_) {}
+  });
+
+  // ── CSSStyleDeclaration: numeric pixel assignments ────────────────────────────
+  // IE accepted  element.style.left = 100  (bare number → implied px).
+  // Chrome silently ignores non-string assignments to layout properties.
+  // Also add IE-specific posLeft/posTop/posWidth/posHeight/pixelLeft/... accessors.
+  (function patchCssStyleDeclaration() {
+    try {
+      var _proto = CSSStyleDeclaration.prototype;
+      var _pixelProps = [
+        'left','top','right','bottom','width','height',
+        'marginTop','marginLeft','marginRight','marginBottom',
+        'paddingTop','paddingLeft','paddingRight','paddingBottom',
+      ];
+      _pixelProps.forEach(function (prop) {
+        var desc = Object.getOwnPropertyDescriptor(_proto, prop);
+        if (!desc || !desc.set) return;
+        Object.defineProperty(_proto, prop, {
+          get: desc.get,
+          set: function (v) { desc.set.call(this, typeof v === 'number' ? v + 'px' : v); },
+          configurable: true,
+        });
+      });
+      // pos* and pixel* accessors (IE: get/set layout values as plain numbers)
+      ['Left','Top','Right','Bottom','Width','Height'].forEach(function (cap) {
+        var lc = cap.toLowerCase();
+        ['pos' + cap, 'pixel' + cap].forEach(function (alias) {
+          Object.defineProperty(_proto, alias, {
+            get:  function () { return parseFloat(this[lc]) || 0; },
+            set:  function (v) { this[lc] = v + 'px'; },
+            configurable: true,
+          });
+        });
+      });
+    } catch (_) {}
+  }());
+
   // ── document.createElement default namespace ─────────────────────────────────
   // Some IE code passes "tag" as uppercase; normalize silently.
   (function patchCreateElement() {
