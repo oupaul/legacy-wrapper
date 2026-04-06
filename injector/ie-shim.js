@@ -103,5 +103,49 @@
     };
   }
 
+  // ── Image submit button coordinate fix ──────────────────────────────────────
+  // Legacy servers (e.g. classic ASP) check OK.x > 0 before processing login.
+  // When the button image is missing/tiny (1×1 fallback GIF), the browser
+  // reports click coordinates (0, 0), causing the server to reject the login.
+  //
+  // Fix: intercept clicks on <input type="image">, calculate real coordinates,
+  // ensure they are at least 1, inject as hidden fields, then submit the form.
+  (function patchImageSubmitCoords() {
+    document.addEventListener('click', function (e) {
+      var btn = e.target;
+      // Walk up in case the click landed on a child of the button
+      while (btn && btn !== document) {
+        if (btn.nodeName === 'INPUT' && btn.type === 'image' && btn.form) break;
+        btn = btn.parentNode;
+      }
+      if (!btn || !btn.form) return;
+
+      var rect = btn.getBoundingClientRect();
+      var x    = Math.round(e.clientX - rect.left);
+      var y    = Math.round(e.clientY - rect.top);
+
+      // If coordinates are 0 (missing/tiny image), use sensible defaults
+      if (x < 1) x = Math.max(1, Math.round(rect.width  / 2)) || 30;
+      if (y < 1) y = Math.max(1, Math.round(rect.height / 2)) || 15;
+
+      e.preventDefault(); // stop browser from appending its own 0,0 coords
+
+      var name = btn.name || 'OK';
+      ['x', 'y'].forEach(function (axis) {
+        var sel = 'input[type="hidden"][name="' + name + '.' + axis + '"]';
+        var hidden = btn.form.querySelector(sel);
+        if (!hidden) {
+          hidden = document.createElement('input');
+          hidden.type = 'hidden';
+          hidden.name = name + '.' + axis;
+          btn.form.appendChild(hidden);
+        }
+        hidden.value = axis === 'x' ? x : y;
+      });
+
+      btn.form.submit();
+    }, true);
+  }());
+
   console.info('[ie-shim] IE compatibility shims applied.');
 }());
