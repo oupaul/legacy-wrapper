@@ -177,6 +177,26 @@ function forwardRequest(req, res) {
         const isCss       = contentType.includes('text/css');
         const isAuthChallenge = (status === 401 || status === 407);
 
+        // ── 404 圖片 fallback ───────────────────────────────────────────────
+        // 部分舊系統用圖片 onload 觸發頁面跳轉，圖片 404 會導致頁面卡死。
+        // 對 404 的圖片回傳 1×1 透明 GIF，讓 onload 能正常觸發。
+        if (status === 404 && /\.(gif|png|jpg|jpeg|bmp|ico|webp)(\?|$)/i.test(req.url)) {
+          // 1×1 transparent GIF (35 bytes)
+          const transparentGif = Buffer.from(
+            '47494638396101000100800000ffffff00000021f90400000000002c00000000' +
+            '010001000002024401003b', 'hex'
+          );
+          upRes.resume(); // drain upstream response
+          res.writeHead(200, {
+            'Content-Type':  'image/gif',
+            'Content-Length': transparentGif.length,
+            'Cache-Control':  'no-store',
+          });
+          res.end(transparentGif);
+          resolve();
+          return;
+        }
+
         // AJAX requests (ExtJS, jQuery, fetch): never inject shims — the caller
         // expects raw JSON/XML, not an HTML document with injected scripts.
         const isXhr = (req.headers['x-requested-with'] || '').toLowerCase()
