@@ -275,6 +275,44 @@
     }, true);
   }());
 
+  // ── Form-in-table foster fix ─────────────────────────────────────────────────
+  // Classic ASP/IE pages placed <form> tags directly inside <tbody>/<tr>.
+  // IE accepted this; modern HTML5 parsers "foster" those forms outside the
+  // table, making them empty while leaving the original <input> elements
+  // orphaned (no form association). Clicking a submit button does nothing.
+  //
+  // Fix: on DOMContentLoaded, pair each empty form with the TR that contains
+  // orphaned inputs (matched by document order) and assign the HTML5 form=
+  // attribute so the browser correctly associates them.
+  document.addEventListener('DOMContentLoaded', function fixOrphanedFormInputs() {
+    try {
+      // Fostered forms: empty (no associated elements) and have an id
+      var emptyForms = Array.from(document.forms).filter(function (f) {
+        return f.elements.length === 0 && f.id;
+      });
+      if (!emptyForms.length) return;
+
+      // TRs that contain inputs/selects not associated with any form
+      var orphanedTrs = [];
+      document.querySelectorAll('tr').forEach(function (tr) {
+        var orphans = Array.from(tr.querySelectorAll('input, select, textarea'))
+          .filter(function (el) { return !el.form; });
+        if (orphans.length) orphanedTrs.push({ tr: tr, orphans: orphans });
+      });
+
+      // Match Nth empty form → Nth orphaned TR (document order)
+      emptyForms.forEach(function (form, i) {
+        var entry = orphanedTrs[i];
+        if (!entry) return;
+        entry.orphans.forEach(function (el) {
+          el.setAttribute('form', form.id);
+        });
+        console.info('[ie-shim] linked ' + entry.orphans.length +
+                     ' inputs to form#' + form.id);
+      });
+    } catch (_) {}
+  });
+
   // ── IE navigation / dialog globals ──────────────────────────────────────────
   // window.navigate(url) is IE-only; classic ASP often uses it for redirects.
   if (!window.navigate) {
