@@ -307,15 +307,21 @@ function forwardRequest(req, res) {
 
           // After decoding to UTF-8, update charset declarations so the browser
           // renders correctly instead of re-interpreting as the original encoding.
-          if (isNonUtf8 && isHtml) {
-            // <meta charset="gb2312"> and <meta http-equiv content="...charset=gb2312">
-            text = text.replace(
-              /(<meta[^>]+charset=["']?)([\w-]+)/gi,
-              '$1utf-8'
-            );
-            // Update the Content-Type header we forward to the browser
-            const newCT = contentType.replace(/charset=[\w-]+/gi, 'charset=utf-8');
-            res.setHeader('content-type', newCT || 'text/html; charset=utf-8');
+          // This applies to ALL buffered content (HTML, JS, CSS), not just HTML.
+          if (isNonUtf8) {
+            if (isHtml) {
+              // Update <meta charset> and <meta http-equiv Content-Type charset>
+              text = text.replace(
+                /(<meta[^>]+charset=["']?)([\w-]+)/gi,
+                '$1utf-8'
+              );
+            }
+            // Replace existing charset= in Content-Type header, or append it
+            let newCT = contentType.replace(/charset=[\w-]+/gi, 'charset=utf-8');
+            if (newCT && !/charset=/i.test(newCT)) {
+              newCT = newCT.replace(/;\s*$/, '').trimEnd() + '; charset=utf-8';
+            }
+            if (newCT) res.setHeader('content-type', newCT);
           }
 
           res.removeHeader('content-length');
