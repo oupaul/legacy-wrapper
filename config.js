@@ -1,45 +1,45 @@
 /**
  * Wrapper configuration.
- * Edit this file to match your environment — no other files need to change.
+ *
+ * 所有設定都可以用環境變數覆蓋，方便 PM2 多實例部署。
+ * 直接修改這裡的值作為預設值；PM2 ecosystem.config.cjs 中的 env 會蓋過它們。
  */
 
-export default {
-  // The legacy system being proxied
-  target: process.env.LEGACY_TARGET || 'http://legacy-system.local',
+const target = process.env.LEGACY_TARGET || 'http://legacy-system.local';
 
-  // Port this wrapper listens on
+// 自動從 target URL 提取 hostname，加入 allowlist（也可手動追加）
+const targetHostname = (() => {
+  try { return new URL(target).hostname; } catch { return ''; }
+})();
+
+export default {
+  // 代理目標（舊系統網址）
+  target,
+
+  // 監聽 port
   port: parseInt(process.env.PORT || '3000', 10),
 
-  // Injection feature flags — set false to disable individual shims globally
+  // 注入功能開關
   injections: {
-    ieShim:      true,   // document.all, attachEvent, window.event, srcElement
-    activexMock: true,   // ActiveXObject, window.external stubs
-    compatCss:   true,   // zoom:1 and other IE layout triggers
+    ieShim:      process.env.INJECT_IE_SHIM      !== 'false',  // 預設 true
+    activexMock: process.env.INJECT_ACTIVEX_MOCK !== 'false',  // 預設 true
+    compatCss:   process.env.INJECT_COMPAT_CSS   !== 'false',  // 預設 true
   },
 
-  // ── Authentication ──────────────────────────────────────────────────────────
-  // Leave auth undefined (or {}) to rely on pure client-header passthrough.
-  // NTLM and Kerberos (Negotiate) tokens from the browser are forwarded
-  // transparently; NTLM connection binding is handled automatically.
+  // ── 認證設定 ──────────────────────────────────────────────────────────────
   auth: {
-    // Upstream request timeout in milliseconds
-    timeoutMs: 30_000,
+    timeoutMs: parseInt(process.env.LEGACY_TIMEOUT || '30000', 10),
 
-    // Set true to accept self-signed certificates on the upstream (intranet)
-    rejectUnauthorized: true,
+    // 舊系統 TLS 1.0/1.1（症狀：EPROTO unsupported protocol）
+    legacySsl: process.env.LEGACY_SSL === 'true',
 
-    // Set true when the upstream uses TLS 1.0 / 1.1 (common on legacy systems).
-    // This lowers Node.js's minimum TLS version and implies rejectUnauthorized:false.
-    // Symptom: EPROTO / "unsupported protocol" error when connecting upstream.
-    legacySsl: false,
+    // 自簽憑證（LEGACY_SSL=true 時自動生效）
+    rejectUnauthorized: process.env.LEGACY_REJECT_UNAUTHORIZED !== 'false',
 
-    // Set true to strip the client's own Authorization header and force the
-    // proxy to authenticate using serviceAccount credentials instead.
-    stripClientAuth: false,
+    // true = 不轉發瀏覽器的 Authorization header，改用 serviceAccount
+    stripClientAuth: process.env.LEGACY_STRIP_AUTH === 'true',
 
-    // Service-account credentials (only needed when stripClientAuth: true).
-    // type: 'basic'  → sends HTTP Basic auth to upstream.
-    // NTLM service-account: requires ntlm-auth package (see README).
+    // service account 模式（stripClientAuth=true 時才需要）
     // serviceAccount: {
     //   type: 'basic',
     //   username: process.env.PROXY_USER,
@@ -47,44 +47,17 @@ export default {
     // },
   },
 
-  // ── Injection rules ─────────────────────────────────────────────────────────
-  // Rules are matched in order.  By default ALL matching rules are merged
-  // (last write wins).  Set rulesMode: 'first' to restore first-match-wins.
+  // ── 注入規則 ──────────────────────────────────────────────────────────────
   rulesMode: 'merge',   // 'merge' | 'first'
 
   rules: [
-    // ── Simple format (path prefix or regex) ──────────────────────────────
-    // { match: /^\/reports\//, overrides: { activexMock: false } },
-    // { match: '/admin/',      overrides: { ieShim: false } },
-
-    // ── Rich format (multi-condition) ──────────────────────────────────────
-    // {
-    //   label: 'API endpoints — skip all injection',
-    //   conditions: [{ type: 'path', match: /^\/api\// }],
-    //   overrides: { ieShim: false, activexMock: false, compatCss: false },
-    // },
-    //
-    // {
-    //   label: 'Print view — disable compat CSS (already print-optimised)',
-    //   conditions: [
-    //     { type: 'query', key: 'mode', match: 'print' },
-    //   ],
-    //   overrides: { compatCss: false },
-    // },
-    //
-    // {
-    //   label: 'Reports section GET only',
-    //   conditions: [
-    //     { type: 'path',   match: /^\/reports\// },
-    //     { type: 'method', match: ['GET', 'HEAD'] },
-    //   ],
-    //   operator: 'AND',
-    //   overrides: { activexMock: false },
-    // },
+    // { match: /^\/api\//, overrides: { ieShim: false, activexMock: false, compatCss: false } },
   ],
 
-  // Allowlist of upstream hosts the proxy will forward to (security guard)
+  // ── 安全 allowlist ────────────────────────────────────────────────────────
+  // target hostname 自動加入；如需額外允許其他 host 手動追加
   allowedTargetHosts: [
-    'legacy-system.local',
-  ],
+    targetHostname,
+    // '192.168.1.100',
+  ].filter(Boolean),
 };
