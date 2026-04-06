@@ -120,6 +120,11 @@
       }
       if (!btn || !btn.form) return;
 
+      // If the button has an onclick handler (e.g. transpiled VBScript),
+      // let that handler set form.action/method and call form.submit() itself.
+      // We must not preventDefault here or we'd swallow the onclick entirely.
+      if (btn.getAttribute && btn.getAttribute('onclick')) return;
+
       var rect = btn.getBoundingClientRect();
       var x    = Math.round(e.clientX - rect.left);
       var y    = Math.round(e.clientY - rect.top);
