@@ -85,27 +85,25 @@
     }
 
     function syncEvent(e) {
-      // srcElement → target
-      if (!e.srcElement) {
+      // srcElement → target (Chrome has this natively, but guard just in case)
+      if (e.srcElement === undefined) {
         try { Object.defineProperty(e, 'srcElement', { get: function () { return e.target; }, configurable: true }); }
         catch (_) {}
       }
-      // returnValue setter (false = preventDefault)
-      try {
-        Object.defineProperty(e, 'returnValue', {
-          get: function () { return !e.defaultPrevented; },
-          set: function (v) { if (!v) e.preventDefault(); },
-          configurable: true,
-        });
-      } catch (_) {}
-      // cancelBubble setter (true = stopPropagation)
-      try {
-        Object.defineProperty(e, 'cancelBubble', {
-          get: function () { return e.cancelBubble || false; },
-          set: function (v) { if (v) e.stopPropagation(); },
-          configurable: true,
-        });
-      } catch (_) {}
+      // returnValue: false = preventDefault.
+      // Only define when not already a native accessor to avoid recursion.
+      if (typeof e.returnValue === 'undefined') {
+        try {
+          Object.defineProperty(e, 'returnValue', {
+            get: function () { return !e.defaultPrevented; },
+            set: function (v) { if (!v) e.preventDefault(); },
+            configurable: true,
+          });
+        } catch (_) {}
+      }
+      // cancelBubble: Chrome exposes this natively (setter calls stopPropagation).
+      // Do NOT redefine it — a custom getter that reads e.cancelBubble causes
+      // infinite recursion and crashes the page.
       _event = e;
     }
   }());
