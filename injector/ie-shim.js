@@ -7,9 +7,11 @@
   'use strict';
 
   // ── document.all ────────────────────────────────────────────────────────────
-  // IE exposed every element via document.all[id].
-  // Modern browsers dropped it; some legacy scripts test `if (document.all)`.
-  if (!document.all) {
+  // Chrome/Edge already ship document.all as a special falsy HTMLAllCollection
+  // that supports named access: document.all['divId'] returns the element.
+  // IMPORTANT: do NOT override it — our simple shim breaks named access.
+  // Only install a shim if document.all is completely absent (shouldn't happen).
+  if (document.all === undefined) {
     try {
       Object.defineProperty(document, 'all', {
         get: function () { return document.getElementsByTagName('*'); },

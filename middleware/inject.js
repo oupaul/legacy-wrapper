@@ -59,20 +59,57 @@ function transpileVBScriptBlock(vbs) {
   // Resolve line continuations
   let src = vbs.replace(/[ \t]+_\r?\n[ \t]*/g, ' ');
 
-  const lines    = src.split(/\r?\n/);
-  const subNames = [];
+  const lines     = src.split(/\r?\n/);
+  const subNames  = [];
+  const arrayNames = [];
 
-  // First pass: collect Sub/Function names for event-attr fixup
+  // First pass: collect Sub/Function names and array names
   for (const line of lines) {
-    const m = line.match(/^\s*(?:Sub|Function)\s+(\w+)/i);
-    if (m) subNames.push(m[1]);
+    const sm = line.match(/^\s*(?:Sub|Function)\s+(\w+)/i);
+    if (sm) subNames.push(sm[1]);
+    // Dim varName(n) or Dim varName(n, m) → array
+    const dm = line.match(/^\s*(?:Re)?Dim\s+(?:Preserve\s+)?(\w+)\s*\(/i);
+    if (dm) arrayNames.push(dm[1]);
   }
 
-  const out = [
-    '/* transpiled from VBScript */',
+  // ── VBScript built-in functions available to transpiled code ────────────────
+  const VB_RUNTIME = [
+    '/* VBScript runtime shims */',
     'function trim(s){return String(s).trim();}',
+    'function Trim(s){return String(s).trim();}',
+    'function LTrim(s){return String(s).replace(/^\\s+/,"");}',
+    'function RTrim(s){return String(s).replace(/\\s+$/,"");}',
+    'function Left(s,n){return String(s).substring(0,n);}',
+    'function Right(s,n){s=String(s);return s.substring(s.length-n);}',
+    'function Mid(s,st,ln){s=String(s);return ln===undefined?s.substring(st-1):s.substring(st-1,st-1+ln);}',
+    'function Len(s){return s==null?"":String(s).length;}',
+    'function UCase(s){return String(s).toUpperCase();}',
+    'function LCase(s){return String(s).toLowerCase();}',
+    'function InStr(a,b){return typeof a==="number"?String(arguments[1]).indexOf(arguments[2])+1:String(a).indexOf(b)+1;}',
+    'function InStrRev(s,f){return String(s).lastIndexOf(f)+1;}',
+    'function Replace(s,f,r){return String(s).split(f).join(r);}',
+    'function Split(s,d,n){var r=String(s).split(d===undefined?",":d);return n>0?r.slice(0,n):r;}',
+    'function Join(a,d){return (a||[]).join(d===undefined?",":d);}',
+    'function UBound(a,d){if(!Array.isArray(a)||!a.length)return -1;return(!d||d===1)?a.length-1:(Array.isArray(a[0])?a[0].length-1:-1);}',
+    'function LBound(){return 0;}',
+    'function IsArray(a){return Array.isArray(a);}',
+    'function IsNull(a){return a===null||a===undefined;}',
+    'function IsEmpty(a){return a===undefined||a===null||a==="";}',
+    'function IsNumeric(a){return !isNaN(parseFloat(a))&&isFinite(a);}',
+    'function CStr(a){return a==null?"":String(a);}',
+    'function CInt(a){return parseInt(a)||0;}',
+    'function CLng(a){return parseInt(a)||0;}',
+    'function CDbl(a){return parseFloat(a)||0;}',
+    'function CBool(a){return!!a;}',
+    'function Abs(n){return Math.abs(n);}',
+    'function Int(n){return Math.floor(n);}',
+    'function Rnd(){return Math.random();}',
+    'function MsgBox(m){alert(m);}',
+    'function msgbox(m){alert(m);}',
     '',
   ];
+
+  const out = ['/* transpiled from VBScript */', ...VB_RUNTIME];
 
   let inSelectCase = false;   // rudimentary Select Case tracking
 
@@ -209,10 +246,23 @@ function transpileVBScriptBlock(vbs) {
     if (/^\s*Do\s*(?:\/\/.*)?$/i.test(l)) { out.push(l.replace(/^(\s*)Do\s*(?:\/\/.*)?$/i, '$1do {')); continue; }
     if (/^\s*Loop\b/i.test(l)) { out.push(l.replace(/^(\s*)Loop\b.*/i, '$1}')); continue; }
 
-    // ── Dim / ReDim → var ─────────────────────────────────────────────────────
+    // ── Dim / ReDim → var (with array dimension support) ─────────────────────
     const dimM = l.match(/^(\s*)(?:Re)?Dim\s+(?:Preserve\s+)?(.+?)\s*(?:\/\/.*)?$/i);
     if (dimM) {
-      out.push(`${dimM[1]}var ${dimM[2]};`);
+      // Each Dim clause may be "name" or "name(n)" or "name(n, m)"
+      const decls = dimM[2].split(',').map(part => {
+        part = part.trim();
+        const arrM = part.match(/^(\w+)\s*\(([^)]*)\)$/);
+        if (!arrM) return part;                        // scalar: Dim x → var x
+        const dims = arrM[2].split(',').map(d => parseInt(d.trim(), 10) + 1);
+        if (dims.length === 1) {
+          return `${arrM[1]} = new Array(${dims[0]})`;
+        }
+        // 2-D: Dim x(n, m)
+        const [rows, cols] = dims;
+        return `${arrM[1]} = (function(){var _a=[];for(var _i=0;_i<${rows};_i++){_a[_i]=new Array(${cols});}return _a;}())`;
+      });
+      out.push(`${dimM[1]}var ${decls.join(', ')};`);
       continue;
     }
 
@@ -224,6 +274,18 @@ function transpileVBScriptBlock(vbs) {
 
     // ── msgbox expr → alert(expr) ─────────────────────────────────────────────
     l = l.replace(/\bmsgbox\s+(.+)$/gi, (_, expr) => `alert(${expr.trim()})`);
+
+    // ── VBScript array subscript: arr(i) → arr[i], arr(i,j) → arr[i][j] ───────
+    // Only for identifiers that were declared as arrays via Dim arr(n).
+    for (const arrName of arrayNames) {
+      l = l.replace(
+        new RegExp(`\\b${arrName}\\s*\\(([^)]+)\\)`, 'g'),
+        (_, args) => {
+          const idxs = args.split(',').map(a => a.trim());
+          return arrName + idxs.map(i => `[${i}]`).join('');
+        }
+      );
+    }
 
     // ── Statement-level literal + concat normalization ────────────────────────
     l = vbLiterals(l);
