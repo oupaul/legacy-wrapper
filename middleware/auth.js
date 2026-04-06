@@ -289,12 +289,18 @@ function forwardRequest(req, res) {
             : rawBuf.toString('utf8');
 
           if (needsInject) {
+            // Trust Content-Type: text/html. The looksLikeHtml check was meant
+            // to guard against AJAX responses mis-labelled as text/html, but we
+            // already exclude XHR via !isXhr. Classic ASP pages produced by
+            // Visual InterDev often start with a <SCRIPT> tag *before* the
+            // <!DOCTYPE>, so the old check rejected them — never injecting the
+            // ie-shim, leaving ToolBar_Supported permanently false.
+            // We keep a weak guard only for obviously non-HTML content.
             const preview = text.trimStart().toLowerCase();
-            const looksLikeHtml = preview.startsWith('<!doctype') ||
-                                  preview.startsWith('<html') ||
-                                  preview.startsWith('<head') ||
-                                  preview.startsWith('<!--');
-            if (looksLikeHtml) {
+            const looksNonHtml = preview.startsWith('{') ||   // JSON object
+                                 preview.startsWith('[') ||   // JSON array
+                                 preview.startsWith('<?xml'); // XML
+            if (!looksNonHtml) {
               text = buildInjectedHtml(text, req);
             }
           }
