@@ -24,6 +24,7 @@ import https from 'node:https';
 import tls   from 'node:tls';
 import { constants } from 'node:crypto';
 import { URL } from 'node:url';
+import iconv from 'iconv-lite';
 import { buildInjectedHtml } from './inject.js';
 import config from '../config.js';
 
@@ -47,6 +48,26 @@ const proxyPublicUrl = config.proxyUrl
 function rewriteUrls(text) {
   if (!proxyPublicUrl) return text;
   return text.replaceAll(upstreamOrigin, proxyPublicUrl);
+}
+
+// ── Charset detection ─────────────────────────────────────────────────────────
+// Returns the charset name found in the Content-Type header or HTML meta tags,
+// or null if unknown (caller should default to utf-8).
+
+function detectCharset(contentTypeHeader, buf) {
+  // 1. Content-Type header is most authoritative
+  const m = (contentTypeHeader || '').match(/charset=([\w-]+)/i);
+  if (m) return m[1];
+
+  // 2. BOM
+  if (buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) return 'utf-8';
+
+  // 3. Sniff HTML <meta charset> from the first 1 KB (read as latin1 to preserve bytes)
+  const snippet = buf.slice(0, 1024).toString('latin1');
+  const mm = snippet.match(/charset=["']?([\w-]+)/i);
+  if (mm) return mm[1];
+
+  return null;
 }
 
 // Lower TLS minimum if upstream is a legacy HTTPS server (TLS 1.0 / 1.1)
@@ -256,7 +277,13 @@ function forwardRequest(req, res) {
         upRes.on('data', c => chunks.push(c));
         upRes.on('end', () => {
           const rawBuf = Buffer.concat(chunks);
-          let text     = rawBuf.toString('utf8');
+
+          // Decode with proper charset (GB2312 / GBK / Big5 → UTF-8 string)
+          const charset    = detectCharset(contentType, rawBuf);
+          const isNonUtf8  = charset && !/^utf-?8$/i.test(charset);
+          let text = isNonUtf8
+            ? iconv.decode(rawBuf, charset)
+            : rawBuf.toString('utf8');
 
           if (needsInject) {
             const preview = text.trimStart().toLowerCase();
@@ -273,6 +300,19 @@ function forwardRequest(req, res) {
           // Handles: HTML src/href, JS window.location, CSS url(), etc.
           if (needsRewrite) {
             text = rewriteUrls(text);
+          }
+
+          // After decoding to UTF-8, update charset declarations so the browser
+          // renders correctly instead of re-interpreting as the original encoding.
+          if (isNonUtf8 && isHtml) {
+            // <meta charset="gb2312"> and <meta http-equiv content="...charset=gb2312">
+            text = text.replace(
+              /(<meta[^>]+charset=["']?)([\w-]+)/gi,
+              '$1utf-8'
+            );
+            // Update the Content-Type header we forward to the browser
+            const newCT = contentType.replace(/charset=[\w-]+/gi, 'charset=utf-8');
+            res.setHeader('content-type', newCT || 'text/html; charset=utf-8');
           }
 
           res.removeHeader('content-length');
