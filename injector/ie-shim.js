@@ -6,6 +6,25 @@
 (function () {
   'use strict';
 
+  // ── ToolBar_Supported / IE feature-flag pre-seeding ─────────────────────────
+  // Classic ASP toolbars gate all initialisation behind:
+  //   if (navigator.userAgent.indexOf("MSIE") != -1 && ...) { ToolBar_Supported = true; }
+  // Chrome/Edge never set it, so every variable inside the block stays undefined.
+  //
+  // We pre-define ToolBar_Supported = true as a NON-WRITABLE window property.
+  // Because the legacy code runs in sloppy mode, its subsequent
+  //   var ToolBar_Supported = false;
+  // silently fails to overwrite a non-writable global → the flag stays true.
+  (function () {
+    if (typeof window.ToolBar_Supported === 'undefined') {
+      try {
+        Object.defineProperty(window, 'ToolBar_Supported', {
+          value: true, writable: false, configurable: false, enumerable: true,
+        });
+      } catch (_) { window.ToolBar_Supported = true; }
+    }
+  }());
+
   // ── document.all ────────────────────────────────────────────────────────────
   // Chrome/Edge already ship document.all as a special falsy HTMLAllCollection
   // that supports named access: document.all['divId'] returns the element.
@@ -55,30 +74,36 @@
       set: function (v) { _event = v; },
       configurable: true,
     });
-    document.addEventListener('click',      syncEvent, true);
-    document.addEventListener('mousedown',  syncEvent, true);
-    document.addEventListener('mouseup',    syncEvent, true);
-    document.addEventListener('keydown',    syncEvent, true);
-    document.addEventListener('keyup',      syncEvent, true);
-    document.addEventListener('keypress',   syncEvent, true);
-    document.addEventListener('submit',     syncEvent, true);
-    document.addEventListener('change',     syncEvent, true);
-    document.addEventListener('focus',      syncEvent, true);
-    document.addEventListener('blur',       syncEvent, true);
+    var _evTypes = [
+      'click','mousedown','mouseup','mouseover','mouseout','mousemove',
+      'keydown','keyup','keypress','submit','change','focus','blur',
+    ];
+    for (var _i = 0; _i < _evTypes.length; _i++) {
+      document.addEventListener(_evTypes[_i], syncEvent, true);
+    }
 
     function syncEvent(e) {
+      // srcElement → target
       if (!e.srcElement) {
-        try { Object.defineProperty(e, 'srcElement', { get: function () { return e.target; } }); }
-        catch (_) { /* read-only in some browsers */ }
+        try { Object.defineProperty(e, 'srcElement', { get: function () { return e.target; }, configurable: true }); }
+        catch (_) {}
       }
-      if (!e.returnValue) {
-        try {
-          Object.defineProperty(e, 'returnValue', {
-            get: function () { return !e.defaultPrevented; },
-            set: function (v) { if (!v) e.preventDefault(); },
-          });
-        } catch (_) {}
-      }
+      // returnValue setter (false = preventDefault)
+      try {
+        Object.defineProperty(e, 'returnValue', {
+          get: function () { return !e.defaultPrevented; },
+          set: function (v) { if (!v) e.preventDefault(); },
+          configurable: true,
+        });
+      } catch (_) {}
+      // cancelBubble setter (true = stopPropagation)
+      try {
+        Object.defineProperty(e, 'cancelBubble', {
+          get: function () { return e.cancelBubble || false; },
+          set: function (v) { if (v) e.stopPropagation(); },
+          configurable: true,
+        });
+      } catch (_) {}
       _event = e;
     }
   }());
