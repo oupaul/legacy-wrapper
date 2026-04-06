@@ -6,22 +6,24 @@
 (function () {
   'use strict';
 
-  // ── ToolBar_Supported / IE feature-flag pre-seeding ─────────────────────────
-  // Classic ASP toolbars gate all initialisation behind:
-  //   if (navigator.userAgent.indexOf("MSIE") != -1 && ...) { ToolBar_Supported = true; }
-  // Chrome/Edge never set it, so every variable inside the block stays undefined.
+  // ── Navigator MSIE spoofing ──────────────────────────────────────────────────
+  // Classic ASP toolbars gate all init behind:
+  //   if (navigator.userAgent.indexOf("MSIE") != -1 && navigator.userAgent.indexOf("Windows") != -1 ...)
+  // Chrome/Edge fail this check → ToolBar_Supported stays false → menu vars never init.
   //
-  // We pre-define ToolBar_Supported = true as a NON-WRITABLE window property.
-  // Because the legacy code runs in sloppy mode, its subsequent
-  //   var ToolBar_Supported = false;
-  // silently fails to overwrite a non-writable global → the flag stays true.
+  // We spoof the UA so the check passes and the legacy script sets its own flag.
+  // We also add "Windows" for non-Windows clients (Mac/Linux) so both conditions pass.
   (function () {
-    if (typeof window.ToolBar_Supported === 'undefined') {
+    var ua = navigator.userAgent;
+    if (ua.indexOf('MSIE') === -1) {
+      var fakeUa = ua + '; compatible; MSIE 11.0';
+      if (ua.indexOf('Windows') === -1) fakeUa += '; Windows NT 10.0';
       try {
-        Object.defineProperty(window, 'ToolBar_Supported', {
-          value: true, writable: false, configurable: false, enumerable: true,
+        Object.defineProperty(navigator, 'userAgent', {
+          get: function () { return fakeUa; },
+          configurable: true,
         });
-      } catch (_) { window.ToolBar_Supported = true; }
+      } catch (_) { /* some browsers don't allow overriding navigator.userAgent */ }
     }
   }());
 
