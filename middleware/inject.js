@@ -297,6 +297,49 @@ function transpileVBScriptBlock(vbs) {
   return { js: out.join('\n'), subNames };
 }
 
+// ── VBScript global function shims (always-on when ieShim is active) ──────────
+// IE made VBScript built-ins (InStr, UCase, etc.) available to JavaScript when
+// VBScript was also loaded on the page.  Classic ASP menu/toolbar JS files often
+// call these functions.  We inject them unconditionally so they're available
+// even on pages that have no inline VBScript blocks.
+const VB_GLOBALS_SCRIPT = `<script>
+/* VBScript global function shims — always available on IE-era pages */
+if(typeof InStr==='undefined'){window.InStr=function(a,b){return typeof a==="number"?String(arguments[1]).indexOf(arguments[2])+1:String(a).indexOf(b)+1;};}
+if(typeof InStrRev==='undefined'){window.InStrRev=function(s,f){return String(s).lastIndexOf(f)+1;};}
+if(typeof Left==='undefined'){window.Left=function(s,n){return String(s).substring(0,n);};}
+if(typeof Right==='undefined'){window.Right=function(s,n){s=String(s);return s.substring(s.length-n);};}
+if(typeof Mid==='undefined'){window.Mid=function(s,st,ln){s=String(s);return ln===undefined?s.substring(st-1):s.substring(st-1,st-1+ln);};}
+if(typeof Len==='undefined'){window.Len=function(s){return s==null?0:String(s).length;};}
+if(typeof UCase==='undefined'){window.UCase=function(s){return String(s).toUpperCase();};}
+if(typeof LCase==='undefined'){window.LCase=function(s){return String(s).toLowerCase();};}
+if(typeof Trim==='undefined'){window.Trim=function(s){return String(s).trim();};}
+if(typeof LTrim==='undefined'){window.LTrim=function(s){return String(s).replace(/^\\s+/,'');};}
+if(typeof RTrim==='undefined'){window.RTrim=function(s){return String(s).replace(/\\s+$/,'');};}
+if(typeof Replace==='undefined'){window.Replace=function(s,f,r){return String(s).split(f).join(r);};}
+if(typeof Split==='undefined'){window.Split=function(s,d,n){var r=String(s).split(d===undefined?',':d);return n>0?r.slice(0,n):r;};}
+if(typeof Join==='undefined'){window.Join=function(a,d){return(a||[]).join(d===undefined?',':d);};}
+if(typeof UBound==='undefined'){window.UBound=function(a,d){if(!Array.isArray(a)||!a.length)return -1;return(!d||d===1)?a.length-1:(Array.isArray(a[0])?a[0].length-1:-1);};}
+if(typeof LBound==='undefined'){window.LBound=function(){return 0;};}
+if(typeof IsArray==='undefined'){window.IsArray=function(a){return Array.isArray(a);};}
+if(typeof IsNull==='undefined'){window.IsNull=function(a){return a===null||a===undefined;};}
+if(typeof IsEmpty==='undefined'){window.IsEmpty=function(a){return a===undefined||a===null||a==='';};}
+if(typeof IsNumeric==='undefined'){window.IsNumeric=function(a){return!isNaN(parseFloat(a))&&isFinite(a);};}
+if(typeof CStr==='undefined'){window.CStr=function(a){return a==null?'':String(a);};}
+if(typeof CInt==='undefined'){window.CInt=function(a){return parseInt(a)||0;};}
+if(typeof CLng==='undefined'){window.CLng=function(a){return parseInt(a)||0;};}
+if(typeof CDbl==='undefined'){window.CDbl=function(a){return parseFloat(a)||0;};}
+if(typeof CBool==='undefined'){window.CBool=function(a){return!!a;};}
+if(typeof Abs==='undefined'){window.Abs=function(n){return Math.abs(n);};}
+if(typeof Int==='undefined'){window.Int=function(n){return Math.floor(n);};}
+if(typeof Rnd==='undefined'){window.Rnd=function(){return Math.random();};}
+if(typeof MsgBox==='undefined'){window.MsgBox=function(m){alert(m);};}
+if(typeof msgbox==='undefined'){window.msgbox=function(m){alert(m);};}
+if(typeof Now==='undefined'){window.Now=function(){return new Date();};}
+if(typeof Date==='undefined'||typeof DateAdd==='undefined'){window.DateAdd=function(i,n,d){var r=new Date(d);if(i==='d')r.setDate(r.getDate()+n);return r;};}
+if(typeof FormatNumber==='undefined'){window.FormatNumber=function(n,d){return Number(n).toFixed(d===undefined?2:d);};}
+if(typeof FormatCurrency==='undefined'){window.FormatCurrency=function(n){return Number(n).toFixed(2);};}
+</script>`;
+
 // ── Main injection entry point ────────────────────────────────────────────────
 
 /**
@@ -368,16 +411,28 @@ export function buildInjectedHtml(html, pathnameOrReq = '/') {
     });
   }
 
-  // ── Step 3: Inject shim <script>/<link> tags into <head> ──────────────────
-  if (tags) {
+  // ── Step 3: Normalize Windows backslash paths in URL attributes ───────────
+  // IE accepted href="..\folder\file.asp"; modern browsers need forward slashes.
+  $('a, link, script, img, form, input, iframe').each((_, el) => {
+    for (const attr of ['href', 'src', 'action']) {
+      const val = $(el).attr(attr);
+      if (val && val.includes('\\')) {
+        $(el).attr(attr, val.replace(/\\/g, '/'));
+      }
+    }
+  });
+
+  // ── Step 4: Inject shim <script>/<link> tags into <head> ──────────────────
+  const headContent = (flags.ieShim ? VB_GLOBALS_SCRIPT + '\n    ' : '') + (tags || '');
+  if (headContent.trim()) {
     if ($('head').length) {
-      $('head').prepend('\n    ' + tags + '\n  ');
+      $('head').prepend('\n    ' + headContent + '\n  ');
     } else {
       const firstScript = $('script').first();
       if (firstScript.length) {
-        firstScript.before(tags);
+        firstScript.before(headContent);
       } else {
-        $('body').prepend(tags);
+        $('body').prepend(headContent);
       }
     }
   }

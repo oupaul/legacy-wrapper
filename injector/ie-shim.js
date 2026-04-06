@@ -179,5 +179,40 @@
     }, true);
   }());
 
+  // ── IE navigation / dialog globals ──────────────────────────────────────────
+  // window.navigate(url) is IE-only; classic ASP often uses it for redirects.
+  if (!window.navigate) {
+    window.navigate = function (url) { window.location.href = url; };
+  }
+  // window.showModalDialog — used by some legacy dialogs; open as popup fallback.
+  if (!window.showModalDialog) {
+    window.showModalDialog = function (url, arg, features) {
+      return window.open(url, '_blank', 'width=600,height=400');
+    };
+  }
+  // document.frames — IE alias for window.frames
+  if (!document.frames) {
+    try { document.frames = window.frames; } catch (_) {}
+  }
+  // CollectGarbage — IE GC hint; safe no-op
+  if (!window.CollectGarbage) {
+    window.CollectGarbage = function () {};
+  }
+  // window.clipboardData — IE clipboard; return stub so code doesn't throw
+  if (!window.clipboardData) {
+    window.clipboardData = {
+      getData:    function () { return ''; },
+      setData:    function () { return false; },
+      clearData:  function () {},
+    };
+  }
+  // ScriptEngineMajorVersion / ScriptEngineMinorVersion — IE/JScript version checks
+  if (!window.ScriptEngineMajorVersion) {
+    window.ScriptEngineMajorVersion = function () { return 5; };
+    window.ScriptEngineMinorVersion = function () { return 8; };
+    window.ScriptEngineBuildVersion = function () { return 0; };
+    window.ScriptEngine             = function () { return 'JScript'; };
+  }
+
   console.info('[ie-shim] IE compatibility shims applied.');
 }());
