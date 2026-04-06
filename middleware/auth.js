@@ -182,11 +182,33 @@ function forwardRequest(req, res) {
         const isXhr = (req.headers['x-requested-with'] || '').toLowerCase()
           === 'xmlhttprequest';
 
-        // Forward response headers
+        // Forward response headers (with cookie + redirect rewriting)
         for (const [k, v] of Object.entries(upRes.headers)) {
-          if (!HOP_BY_HOP_RES.has(k.toLowerCase())) {
-            res.setHeader(k, v);
+          const lower = k.toLowerCase();
+          if (HOP_BY_HOP_RES.has(lower)) continue;
+
+          // Rewrite Location redirect to go through proxy
+          if (lower === 'location' && proxyPublicUrl) {
+            const rewritten = (Array.isArray(v) ? v : [v]).map(url =>
+              url.startsWith(upstreamOrigin) ? proxyPublicUrl + url.slice(upstreamOrigin.length) : url
+            );
+            res.setHeader(k, rewritten.length === 1 ? rewritten[0] : rewritten);
+            continue;
           }
+
+          // Rewrite Set-Cookie: strip Domain so cookie is valid on proxy host,
+          // strip Secure flag if proxy is HTTP, rewrite paths if needed
+          if (lower === 'set-cookie') {
+            const cookies = (Array.isArray(v) ? v : [v]).map(cookie =>
+              cookie
+                .replace(/;\s*Domain=[^;]*/gi, '')        // remove Domain= attribute
+                .replace(/;\s*Secure(?=;|$)/gi, '')        // remove Secure if proxy is HTTP
+            );
+            res.setHeader(k, cookies);
+            continue;
+          }
+
+          res.setHeader(k, v);
         }
         res.statusCode = status;
 
