@@ -20,6 +20,7 @@
 
 import http  from 'node:http';
 import https from 'node:https';
+import tls   from 'node:tls';
 import { URL } from 'node:url';
 import { explainRules } from '../middleware/rules.js';
 
@@ -39,7 +40,8 @@ const flags       = {
   user:         argVal('--user'),
   pass:         argVal('--pass'),
   headers:      argMulti('--header'),
-  noTlsVerify:  args.includes('--no-tls-verify'),
+  noTlsVerify:  args.includes('--no-tls-verify') || args.includes('--legacy-ssl'),
+  legacySsl:    args.includes('--legacy-ssl') || args.includes('--no-tls-verify'),
   json:         args.includes('--json'),
   showRules:    args.includes('--rules'),
 };
@@ -81,6 +83,12 @@ async function fetchPage(rawUrl) {
 
   const mod = url.protocol === 'https:' ? https : http;
 
+  // Legacy SSL: lower TLS minimum version for this process so OpenSSL 3
+  // accepts TLS 1.0 / 1.1 servers (common on intranet legacy systems).
+  if (flags.legacySsl && url.protocol === 'https:') {
+    tls.DEFAULT_MIN_VERSION = 'TLSv1';
+  }
+
   return new Promise((resolve, reject) => {
     const options = {
       hostname: url.hostname,
@@ -89,7 +97,14 @@ async function fetchPage(rawUrl) {
       method:   'GET',
       headers:  reqHeaders,
     };
-    if (flags.noTlsVerify) options.rejectUnauthorized = false;
+    if (flags.legacySsl && url.protocol === 'https:') {
+      options.agent = new https.Agent({
+        rejectUnauthorized: false,
+        minVersion: 'TLSv1',
+      });
+    } else if (flags.noTlsVerify) {
+      options.rejectUnauthorized = false;
+    }
 
     const req = mod.request(options, res => {
       const chunks = [];

@@ -21,6 +21,7 @@
 
 import http  from 'node:http';
 import https from 'node:https';
+import tls   from 'node:tls';
 import { URL } from 'node:url';
 import { buildInjectedHtml } from './inject.js';
 import config from '../config.js';
@@ -34,6 +35,11 @@ const upstreamPort = targetUrl.port
   ? parseInt(targetUrl.port, 10)
   : (isHttps ? 443 : 80);
 
+// Lower TLS minimum if upstream is a legacy HTTPS server (TLS 1.0 / 1.1)
+if (isHttps && config.auth?.legacySsl) {
+  tls.DEFAULT_MIN_VERSION = 'TLSv1';
+}
+
 // ── Per-client-socket agent pool (NTLM connection binding) ────────────────────
 // Each client socket gets exactly one upstream agent.
 // maxSockets:1 forces all requests from that client to reuse one upstream conn.
@@ -42,7 +48,14 @@ const socketAgents = new Map();
 
 function agentFor(clientSocket) {
   if (!socketAgents.has(clientSocket)) {
-    const agent = new httpModule.Agent({ keepAlive: true, maxSockets: 1 });
+    const agentOpts = { keepAlive: true, maxSockets: 1 };
+    if (isHttps && config.auth?.legacySsl) {
+      agentOpts.rejectUnauthorized = false;
+      agentOpts.minVersion = 'TLSv1';
+    } else if (isHttps && config.auth?.rejectUnauthorized === false) {
+      agentOpts.rejectUnauthorized = false;
+    }
+    const agent = new httpModule.Agent(agentOpts);
     socketAgents.set(clientSocket, agent);
     clientSocket.once('close', () => {
       const a = socketAgents.get(clientSocket);
@@ -137,10 +150,6 @@ function forwardRequest(req, res) {
         agent:    agentFor(req.socket),   // ← NTLM connection binding
         timeout:  (config.auth?.timeoutMs ?? 30_000),
       };
-
-      if (isHttps && authCfg.rejectUnauthorized === false) {
-        options.rejectUnauthorized = false; // intranet self-signed cert support
-      }
 
       const upReq = httpModule.request(options, upRes => {
         const status      = upRes.statusCode;

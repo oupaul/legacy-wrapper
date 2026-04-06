@@ -28,6 +28,11 @@ export default {
     // Set true to accept self-signed certificates on the upstream (intranet)
     rejectUnauthorized: true,
 
+    // Set true when the upstream uses TLS 1.0 / 1.1 (common on legacy systems).
+    // This lowers Node.js's minimum TLS version and implies rejectUnauthorized:false.
+    // Symptom: EPROTO / "unsupported protocol" error when connecting upstream.
+    legacySsl: false,
+
     // Set true to strip the client's own Authorization header and force the
     // proxy to authenticate using serviceAccount credentials instead.
     stripClientAuth: false,
