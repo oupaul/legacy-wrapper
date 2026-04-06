@@ -47,6 +47,14 @@ export default {
     // },
   },
 
+  // ── URL 替換 ──────────────────────────────────────────────────────────────
+  // 設定後，HTML/JS/CSS 回應裡所有指向原始伺服器的絕對 URL 會被替換成 proxy URL。
+  // 解決「瀏覽器繞過 proxy 直連原始 IP 導致 404/拒絕連線」的問題。
+  //
+  // PROXY_PUBLIC_URL = 使用者瀏覽器實際看到的 proxy 網址（含 port）
+  //   例：http://10.201.15.31:3001
+  proxyUrl: process.env.PROXY_PUBLIC_URL || null,
+
   // ── 注入規則 ──────────────────────────────────────────────────────────────
   rulesMode: 'merge',   // 'merge' | 'first'
 

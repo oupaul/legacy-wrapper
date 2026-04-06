@@ -26,12 +26,24 @@ module.exports = {
       },
     },
 
-    // ── 範例 2：內網舊 ERP（HTTP，無憑證問題）─────────────────────────────
+    // ── Cemma ESS（HTTP，含 URL 替換）──────────────────────────────────────
+    // {
+    //   name:   'cemma-ess',
+    //   script: 'server.js',
+    //   env: {
+    //     PORT:             '3001',
+    //     LEGACY_TARGET:    'http://111.198.160.165:88',   // 不含 path
+    //     PROXY_PUBLIC_URL: 'http://10.201.15.31:3001',    // ← 改成這台主機的 IP
+    //     NODE_ENV:         'production',
+    //   },
+    // },
+
+    // ── 範例 3：內網舊 ERP（HTTP，無憑證問題）─────────────────────────────
     // {
     //   name:   'legacy-erp',
     //   script: 'server.js',
     //   env: {
-    //     PORT:          '3001',
+    //     PORT:          '3002',
     //     LEGACY_TARGET: 'http://192.168.1.100',
     //     NODE_ENV:      'production',
     //   },

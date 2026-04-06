@@ -36,6 +36,19 @@ const upstreamPort = targetUrl.port
   ? parseInt(targetUrl.port, 10)
   : (isHttps ? 443 : 80);
 
+// ── URL 替換設定 ──────────────────────────────────────────────────────────
+// 原始伺服器的 origin（e.g. http://111.198.160.165:88）
+const upstreamOrigin = `${targetUrl.protocol}//${targetUrl.host}`;
+// proxy 的公開 URL（e.g. http://10.201.15.31:3001），null = 不替換
+const proxyPublicUrl = config.proxyUrl
+  ? config.proxyUrl.replace(/\/$/, '')   // 去尾部斜線
+  : null;
+
+function rewriteUrls(text) {
+  if (!proxyPublicUrl) return text;
+  return text.replaceAll(upstreamOrigin, proxyPublicUrl);
+}
+
 // Lower TLS minimum if upstream is a legacy HTTPS server (TLS 1.0 / 1.1)
 if (isHttps && config.auth?.legacySsl) {
   tls.DEFAULT_MIN_VERSION = 'TLSv1';
@@ -160,9 +173,11 @@ function forwardRequest(req, res) {
         const status      = upRes.statusCode;
         const contentType = upRes.headers['content-type'] || '';
         const isHtml      = contentType.includes('text/html');
+        const isJs        = /javascript/.test(contentType);
+        const isCss       = contentType.includes('text/css');
         const isAuthChallenge = (status === 401 || status === 407);
 
-        // AJAX requests (ExtJS, jQuery, fetch): never inject — the caller
+        // AJAX requests (ExtJS, jQuery, fetch): never inject shims — the caller
         // expects raw JSON/XML, not an HTML document with injected scripts.
         const isXhr = (req.headers['x-requested-with'] || '').toLowerCase()
           === 'xmlhttprequest';
@@ -175,37 +190,43 @@ function forwardRequest(req, res) {
         }
         res.statusCode = status;
 
-        if (!isHtml || isAuthChallenge || isXhr) {
-          // Non-HTML / auth challenges / AJAX: pipe straight through
+        // ── Decide whether to buffer (inject + rewrite) or pipe straight through
+        const needsRewrite  = proxyPublicUrl && (isHtml || isJs || isCss) && !isAuthChallenge;
+        const needsInject   = isHtml && !isXhr;
+
+        if (!needsRewrite && !needsInject) {
           upRes.pipe(res, { end: true });
           upRes.on('end', resolve);
           upRes.on('error', reject);
           return;
         }
 
-        // HTML: buffer → verify it's actually an HTML document → inject → send
+        // Buffer → transform → send
         const chunks = [];
         upRes.on('data', c => chunks.push(c));
         upRes.on('end', () => {
-          const rawBuf  = Buffer.concat(chunks);
-          const preview = rawBuf.slice(0, 512).toString('utf8').trimStart().toLowerCase();
+          const rawBuf = Buffer.concat(chunks);
+          let text     = rawBuf.toString('utf8');
 
-          // Second-level guard: Content-Type said text/html but body is not an
-          // HTML document (e.g. old servers returning JSON with wrong MIME type).
-          const looksLikeHtml = preview.startsWith('<!doctype') ||
-                                preview.startsWith('<html') ||
-                                preview.startsWith('<head') ||
-                                preview.startsWith('<!--');
-
-          if (!looksLikeHtml) {
-            res.end(rawBuf);
-            resolve();
-            return;
+          if (needsInject) {
+            const preview = text.trimStart().toLowerCase();
+            const looksLikeHtml = preview.startsWith('<!doctype') ||
+                                  preview.startsWith('<html') ||
+                                  preview.startsWith('<head') ||
+                                  preview.startsWith('<!--');
+            if (looksLikeHtml) {
+              text = buildInjectedHtml(text, req);
+            }
           }
 
-          const patched = buildInjectedHtml(rawBuf.toString('utf8'), req);
+          // Replace all upstream origin references with proxy URL
+          // Handles: HTML src/href, JS window.location, CSS url(), etc.
+          if (needsRewrite) {
+            text = rewriteUrls(text);
+          }
+
           res.removeHeader('content-length');
-          res.end(patched);
+          res.end(text);
           resolve();
         });
         upRes.on('error', reject);
