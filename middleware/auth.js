@@ -162,6 +162,11 @@ function forwardRequest(req, res) {
         const isHtml      = contentType.includes('text/html');
         const isAuthChallenge = (status === 401 || status === 407);
 
+        // AJAX requests (ExtJS, jQuery, fetch): never inject — the caller
+        // expects raw JSON/XML, not an HTML document with injected scripts.
+        const isXhr = (req.headers['x-requested-with'] || '').toLowerCase()
+          === 'xmlhttprequest';
+
         // Forward response headers
         for (const [k, v] of Object.entries(upRes.headers)) {
           if (!HOP_BY_HOP_RES.has(k.toLowerCase())) {
@@ -170,20 +175,35 @@ function forwardRequest(req, res) {
         }
         res.statusCode = status;
 
-        if (!isHtml || isAuthChallenge) {
-          // Auth challenges and non-HTML: pipe straight through
+        if (!isHtml || isAuthChallenge || isXhr) {
+          // Non-HTML / auth challenges / AJAX: pipe straight through
           upRes.pipe(res, { end: true });
           upRes.on('end', resolve);
           upRes.on('error', reject);
           return;
         }
 
-        // HTML: buffer → inject → send
+        // HTML: buffer → verify it's actually an HTML document → inject → send
         const chunks = [];
         upRes.on('data', c => chunks.push(c));
         upRes.on('end', () => {
-          const raw      = Buffer.concat(chunks).toString('utf8');
-          const patched  = buildInjectedHtml(raw, req.path);
+          const rawBuf  = Buffer.concat(chunks);
+          const preview = rawBuf.slice(0, 512).toString('utf8').trimStart().toLowerCase();
+
+          // Second-level guard: Content-Type said text/html but body is not an
+          // HTML document (e.g. old servers returning JSON with wrong MIME type).
+          const looksLikeHtml = preview.startsWith('<!doctype') ||
+                                preview.startsWith('<html') ||
+                                preview.startsWith('<head') ||
+                                preview.startsWith('<!--');
+
+          if (!looksLikeHtml) {
+            res.end(rawBuf);
+            resolve();
+            return;
+          }
+
+          const patched = buildInjectedHtml(rawBuf.toString('utf8'), req);
           res.removeHeader('content-length');
           res.end(patched);
           resolve();
