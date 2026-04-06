@@ -6,7 +6,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "start:legacy-ssl": "OPENSSL_CONF=./legacy-openssl.cnf node server.js",
+    "dev": "node --watch server.js",
+    "dev:legacy-ssl": "OPENSSL_CONF=./legacy-openssl.cnf node --watch server.js",
+    "diagnose": "node tools/diagnose.js",
+    "diagnose:legacy-ssl": "OPENSSL_CONF=./legacy-openssl.cnf node tools/diagnose.js"
   },
   "dependencies": {
     "cheerio": "^1.0.0",

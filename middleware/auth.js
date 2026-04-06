@@ -22,6 +22,7 @@
 import http  from 'node:http';
 import https from 'node:https';
 import tls   from 'node:tls';
+import { constants } from 'node:crypto';
 import { URL } from 'node:url';
 import { buildInjectedHtml } from './inject.js';
 import config from '../config.js';
@@ -52,6 +53,10 @@ function agentFor(clientSocket) {
     if (isHttps && config.auth?.legacySsl) {
       agentOpts.rejectUnauthorized = false;
       agentOpts.minVersion = 'TLSv1';
+      agentOpts.ciphers = 'ALL:@SECLEVEL=0';
+      agentOpts.secureOptions =
+        constants.SSL_OP_LEGACY_SERVER_CONNECT |
+        constants.SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION;
     } else if (isHttps && config.auth?.rejectUnauthorized === false) {
       agentOpts.rejectUnauthorized = false;
     }
