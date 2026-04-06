@@ -392,6 +392,32 @@ export function buildInjectedHtml(html, pathnameOrReq = '/') {
     $('body').append(`\n<script>\n${aliases}\n</script>`);
   }
 
+  // ── Step 2a: Convert <script for="..." event="..."> to addEventListener ──────
+  // IE-specific inline event binding:  <script for="document" event="onkeydown">
+  // In IE this attaches a handler; in Chrome the script executes immediately at
+  // page-load time (no event object), causing  event.ctrlKey → null.ctrlKey →
+  // TypeError that can break subsequent script execution.
+  $('script[for][event]').each((_, el) => {
+    const forTarget = $(el).attr('for') || '';
+    const ieEvent   = $(el).attr('event') || '';
+    const eventName = ieEvent.replace(/^on/i, '').toLowerCase();
+    if (!eventName) { $(el).remove(); return; }
+
+    let raw = $(el).html() || '';
+    // Strip HTML comment wrappers <!-- ... -->
+    raw = raw.replace(/^[\s\S]*?<!--/, '').replace(/-->[\s\S]*$/, '').trim();
+    if (!raw) { $(el).remove(); return; }
+
+    // Map "document" / "window" / element-id to a JS expression
+    const target = forTarget === 'document' ? 'document'
+                 : forTarget === 'window'   ? 'window'
+                 : `(document.getElementById(${JSON.stringify(forTarget)})||document)`;
+
+    $(el).replaceWith(
+      `<script>${target}.addEventListener(${JSON.stringify(eventName)},function(){${raw}});</script>`
+    );
+  });
+
   // ── Step 2: Fix onclick="SubName" → onclick="SubName()" ───────────────────
   // VBScript event attrs reference Sub names without parentheses;
   // in JS that evaluates the function object without calling it.

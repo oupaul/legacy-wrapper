@@ -189,7 +189,53 @@ function forwardRequest(req, res) {
     const bodyChunks = [];
     req.on('data', c => bodyChunks.push(c));
     req.on('end', () => {
-      const body = Buffer.concat(bodyChunks);
+      let body = Buffer.concat(bodyChunks);
+
+      // ── Re-encode URL-form-encoded POST body: UTF-8 → upstream legacy charset ──
+      // We serve HTML decoded to UTF-8, so the browser submits form data in UTF-8.
+      // Classic ASP servers read Request.Form with GB2312/GBK codepage — Chinese
+      // field values (e.g. collector name, department) arrive as garbled bytes,
+      // causing SQL queries to return 0 results.
+      // Fix: percent-encode each form value using the upstream charset's bytes.
+      const legacyCharset = config.auth?.defaultCharset;
+      const reqCt = (req.headers['content-type'] || '').toLowerCase();
+      if (body.length > 0 &&
+          legacyCharset && !/^utf-?8$/i.test(legacyCharset) &&
+          reqCt.includes('application/x-www-form-urlencoded')) {
+        try {
+          // Percent-encode bytes from a Buffer: unreserved chars pass through,
+          // everything else (including all high bytes) gets %XX encoded.
+          const pctEncode = buf => {
+            let out = '';
+            for (const b of buf) {
+              if (b === 0x20) { out += '+'; }
+              else if (
+                (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A) ||
+                (b >= 0x30 && b <= 0x39) ||
+                b === 0x2D || b === 0x5F || b === 0x2E || b === 0x7E
+              ) {
+                out += String.fromCharCode(b); // A-Z a-z 0-9 - _ . ~
+              } else {
+                out += '%' + b.toString(16).padStart(2, '0').toUpperCase();
+              }
+            }
+            return out;
+          };
+
+          const params = new URLSearchParams(body.toString('utf8'));
+          const parts  = [];
+          for (const [k, v] of params.entries()) {
+            parts.push(pctEncode(iconv.encode(k, legacyCharset)) +
+                       '=' +
+                       pctEncode(iconv.encode(v, legacyCharset)));
+          }
+          body = Buffer.from(parts.join('&'), 'ascii');
+          headers['content-length'] = String(body.length);
+          console.info(`[auth] re-encoded POST body UTF-8→${legacyCharset} (${body.length}B)`);
+        } catch (e) {
+          console.warn('[auth] POST charset re-encode failed:', e.message);
+        }
+      }
 
       const options = {
         hostname: targetUrl.hostname,
