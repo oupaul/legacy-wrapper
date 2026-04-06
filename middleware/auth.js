@@ -139,6 +139,14 @@ function forwardRequest(req, res) {
       const lower = k.toLowerCase();
       if (HOP_BY_HOP_REQ.has(lower)) continue;
       if (lower === 'authorization' && !shouldPassClientAuth()) continue;
+
+      // Rewrite Referer / Origin so the upstream sees its own domain,
+      // not the proxy URL. Some servers reject requests with foreign Referer.
+      if (proxyPublicUrl && (lower === 'referer' || lower === 'origin')) {
+        headers[k] = v.replace(proxyPublicUrl, upstreamOrigin);
+        continue;
+      }
+
       headers[k] = v;
     }
     headers['host'] = targetUrl.host;
