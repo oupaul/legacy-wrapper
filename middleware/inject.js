@@ -21,90 +21,213 @@ function buildTags(flags) {
 }
 
 // ── VBScript → JavaScript transpiler ─────────────────────────────────────────
-// Handles the common subset found in classic ASP form pages:
-//   Sub/End Sub, If/ElseIf/Else/End If, msgbox, trim(), basic operators.
+// Covers the common subset found in classic ASP pages:
+//   Sub/Function, If/ElseIf/Else/End If, For/Next, For Each/Next,
+//   While/Wend, Do While/Loop, Dim, Set, Select Case (basic),
+//   Exit Sub/Function, True/False/Null/Nothing/Empty, & concat, msgbox.
 
+/** Replace VBScript literal keywords with JS equivalents (word-boundary, case-insensitive). */
+function vbLiterals(s) {
+  return s
+    .replace(/\bTrue\b/gi,    'true')
+    .replace(/\bFalse\b/gi,   'false')
+    .replace(/\bNull\b/gi,    'null')
+    .replace(/\bNothing\b/gi, 'null')
+    .replace(/\bEmpty\b/gi,   "''");
+}
+
+/** Convert a VBScript expression to JS (literals + string concat). */
+function vbExpr(e) {
+  let s = vbLiterals(e.trim());
+  s = s.replace(/\s+&\s+/g, ' + ');   // VBScript & string concat → JS +
+  return s;
+}
+
+/** Convert a VBScript condition to JS (operators + literals). */
 function vbCondToJs(cond) {
-  let c = cond.trim();
-  // String inequality
-  c = c.replace(/<>/g, '!==');
-  // Boolean operators
-  c = c.replace(/\bAnd\b/gi, '&&');
-  c = c.replace(/\bOr\b/gi,  '||');
-  c = c.replace(/\bNot\b/gi, '!');
-  // VBScript = is equality in conditions (not assignment) → ===
-  // Guard: don't replace =< >= == !=
+  let c = vbExpr(cond);
+  c = c.replace(/<>/g,         '!==');
+  c = c.replace(/\bAnd\b/gi,   '&&');
+  c = c.replace(/\bOr\b/gi,    '||');
+  c = c.replace(/\bNot\b/gi,   '!');
+  // VBScript = in conditions means equality → ===
   c = c.replace(/(?<![=!<>])=(?!=)/g, '===');
   return c;
 }
 
 function transpileVBScriptBlock(vbs) {
-  // Resolve line continuations first
+  // Resolve line continuations
   let src = vbs.replace(/[ \t]+_\r?\n[ \t]*/g, ' ');
 
   const lines    = src.split(/\r?\n/);
   const subNames = [];
 
-  // First pass: collect Sub names (needed for event-attribute fixup)
+  // First pass: collect Sub/Function names for event-attr fixup
   for (const line of lines) {
-    const m = line.match(/^\s*Sub\s+(\w+)/i);
+    const m = line.match(/^\s*(?:Sub|Function)\s+(\w+)/i);
     if (m) subNames.push(m[1]);
   }
 
-  // Helpers injected at the top of the transpiled block
   const out = [
     '/* transpiled from VBScript */',
     'function trim(s){return String(s).trim();}',
     '',
   ];
 
+  let inSelectCase = false;   // rudimentary Select Case tracking
+
   for (const raw of lines) {
     let l = raw;
 
-    // VBScript comment  ' text → // text
+    // ── Comments ──────────────────────────────────────────────────────────────
     l = l.replace(/^(\s*)'(.*)$/, '$1//$2');
 
-    // Sub Name / Sub Name() → function Name() {
-    const subM = l.match(/^(\s*)Sub\s+(\w+)\s*(?:\([^)]*\))?\s*(?:\/\/.*)?$/i);
+    // ── Sub / Function ────────────────────────────────────────────────────────
+    const subM = l.match(/^(\s*)Sub\s+(\w+)\s*(?:\(([^)]*)\))?\s*(?:\/\/.*)?$/i);
     if (subM) {
-      out.push(`${subM[1]}function ${subM[2]}() {`);
+      out.push(`${subM[1]}function ${subM[2]}(${subM[3] || ''}) {`);
+      continue;
+    }
+    const fnM = l.match(/^(\s*)Function\s+(\w+)\s*(?:\(([^)]*)\))?\s*(?:\/\/.*)?$/i);
+    if (fnM) {
+      out.push(`${fnM[1]}function ${fnM[2]}(${fnM[3] || ''}) {`);
       continue;
     }
 
-    // End Sub → }
-    if (/^\s*End\s+Sub\s*(?:\/\/.*)?$/i.test(l)) {
-      out.push(l.replace(/^(\s*)End\s+Sub\s*(?:\/\/.*)?$/i, '$1}'));
+    // ── End Sub / End Function ────────────────────────────────────────────────
+    if (/^\s*End\s+(Sub|Function)\s*(?:\/\/.*)?$/i.test(l)) {
+      out.push(l.replace(/^(\s*)End\s+(Sub|Function)\s*(?:\/\/.*)?$/i, '$1}'));
       continue;
     }
 
-    // ElseIf condition Then → } else if (condition) {
+    // ── Exit Sub / Exit Function → return ─────────────────────────────────────
+    if (/^\s*Exit\s+(Sub|Function)\s*(?:\/\/.*)?$/i.test(l)) {
+      out.push(l.replace(/^(\s*)Exit\s+(Sub|Function)\s*(?:\/\/.*)?$/i, '$1return;'));
+      continue;
+    }
+
+    // ── Select Case → switch ──────────────────────────────────────────────────
+    const selM = l.match(/^(\s*)Select\s+Case\s+(.+?)\s*(?:\/\/.*)?$/i);
+    if (selM) {
+      out.push(`${selM[1]}switch (${vbExpr(selM[2])}) {`);
+      inSelectCase = true;
+      continue;
+    }
+    if (inSelectCase) {
+      const caseM = l.match(/^(\s*)Case\s+Else\s*(?:\/\/.*)?$/i);
+      if (caseM) { out.push(`${caseM[1]}default:`); continue; }
+      const caseVals = l.match(/^(\s*)Case\s+(.+?)\s*(?:\/\/.*)?$/i);
+      if (caseVals) {
+        const cases = caseVals[2].split(',').map(v => `case ${vbExpr(v.trim())}:`).join(' ');
+        out.push(`${caseVals[1]}${cases}`);
+        continue;
+      }
+      if (/^\s*End\s+Select\s*(?:\/\/.*)?$/i.test(l)) {
+        out.push(l.replace(/^(\s*)End\s+Select\s*(?:\/\/.*)?$/i, '$1}'));
+        inSelectCase = false;
+        continue;
+      }
+    }
+
+    // ── ElseIf ────────────────────────────────────────────────────────────────
     const elseifM = l.match(/^(\s*)ElseIf\s+(.*?)\s+Then\s*(?:\/\/.*)?$/i);
     if (elseifM) {
       out.push(`${elseifM[1]}} else if (${vbCondToJs(elseifM[2])}) {`);
       continue;
     }
 
-    // If condition Then → if (condition) {
-    const ifM = l.match(/^(\s*)If\s+(.*?)\s+Then\s*(?:\/\/.*)?$/i);
-    if (ifM) {
-      out.push(`${ifM[1]}if (${vbCondToJs(ifM[2])}) {`);
+    // ── If … Then (block vs single-line) ──────────────────────────────────────
+    const ifLineM = l.match(/^(\s*)If\s+(.*?)\s+Then(.*?)(?:'.*)?$/i);
+    if (ifLineM) {
+      const afterThen = ifLineM[3].trim().replace(/\/\/.*$/, '').trim();
+      if (afterThen) {
+        // Single-line:  If cond Then stmt [Else stmt2]
+        const elseIdx = afterThen.search(/\bElse\b/i);
+        if (elseIdx >= 0) {
+          const thenStmt = vbExpr(afterThen.slice(0, elseIdx).trim());
+          const elseStmt = vbExpr(afterThen.slice(elseIdx + 4).trim());
+          out.push(`${ifLineM[1]}if (${vbCondToJs(ifLineM[2])}) { ${thenStmt}; } else { ${elseStmt}; }`);
+        } else {
+          out.push(`${ifLineM[1]}if (${vbCondToJs(ifLineM[2])}) { ${vbExpr(afterThen)}; }`);
+        }
+      } else {
+        // Block If
+        out.push(`${ifLineM[1]}if (${vbCondToJs(ifLineM[2])}) {`);
+      }
       continue;
     }
 
-    // Else → } else {
+    // ── Else / End If ─────────────────────────────────────────────────────────
     if (/^\s*Else\s*(?:\/\/.*)?$/i.test(l)) {
       out.push(l.replace(/^(\s*)Else\s*(?:\/\/.*)?$/i, '$1} else {'));
       continue;
     }
-
-    // End If → }
     if (/^\s*End\s+If\s*(?:\/\/.*)?$/i.test(l)) {
       out.push(l.replace(/^(\s*)End\s+If\s*(?:\/\/.*)?$/i, '$1}'));
       continue;
     }
 
-    // msgbox expr  →  alert(expr)
+    // ── For i = start To end [Step n] ─────────────────────────────────────────
+    const forM = l.match(/^(\s*)For\s+(\w+)\s*=\s*(.+?)\s+To\s+(.+?)(?:\s+Step\s+(.+?))?\s*(?:\/\/.*)?$/i);
+    if (forM) {
+      const [, ind, iv, start, end, step] = forM;
+      const sv  = step ? vbExpr(step) : '1';
+      const op  = (step && step.trim().startsWith('-')) ? '>=' : '<=';
+      out.push(`${ind}for (var ${iv} = ${vbExpr(start)}; ${iv} ${op} ${vbExpr(end)}; ${iv} += ${sv}) {`);
+      continue;
+    }
+
+    // ── For Each x In coll ────────────────────────────────────────────────────
+    const forEachM = l.match(/^(\s*)For\s+Each\s+(\w+)\s+In\s+(.+?)\s*(?:\/\/.*)?$/i);
+    if (forEachM) {
+      out.push(`${forEachM[1]}var _fe_ = Array.from(${vbExpr(forEachM[3])} || []); for (var _fi_ = 0; _fi_ < _fe_.length; _fi_++) { var ${forEachM[2]} = _fe_[_fi_];`);
+      continue;
+    }
+
+    // ── Next ──────────────────────────────────────────────────────────────────
+    if (/^\s*Next\b/i.test(l)) {
+      out.push(l.replace(/^(\s*)Next\b.*/i, '$1}'));
+      continue;
+    }
+
+    // ── While / Wend ──────────────────────────────────────────────────────────
+    const whileM = l.match(/^(\s*)While\s+(.*?)\s*(?:\/\/.*)?$/i);
+    if (whileM) {
+      out.push(`${whileM[1]}while (${vbCondToJs(whileM[2])}) {`);
+      continue;
+    }
+    if (/^\s*Wend\s*(?:\/\/.*)?$/i.test(l)) {
+      out.push(l.replace(/^(\s*)Wend\s*(?:\/\/.*)?$/i, '$1}'));
+      continue;
+    }
+
+    // ── Do While / Do Until / Do / Loop ──────────────────────────────────────
+    const doWhileM = l.match(/^(\s*)Do\s+While\s+(.*?)\s*(?:\/\/.*)?$/i);
+    if (doWhileM) { out.push(`${doWhileM[1]}while (${vbCondToJs(doWhileM[2])}) {`); continue; }
+    const doUntilM = l.match(/^(\s*)Do\s+Until\s+(.*?)\s*(?:\/\/.*)?$/i);
+    if (doUntilM) { out.push(`${doUntilM[1]}while (!(${vbCondToJs(doUntilM[2])})) {`); continue; }
+    if (/^\s*Do\s*(?:\/\/.*)?$/i.test(l)) { out.push(l.replace(/^(\s*)Do\s*(?:\/\/.*)?$/i, '$1do {')); continue; }
+    if (/^\s*Loop\b/i.test(l)) { out.push(l.replace(/^(\s*)Loop\b.*/i, '$1}')); continue; }
+
+    // ── Dim / ReDim → var ─────────────────────────────────────────────────────
+    const dimM = l.match(/^(\s*)(?:Re)?Dim\s+(?:Preserve\s+)?(.+?)\s*(?:\/\/.*)?$/i);
+    if (dimM) {
+      out.push(`${dimM[1]}var ${dimM[2]};`);
+      continue;
+    }
+
+    // ── Set obj = expr → obj = expr ───────────────────────────────────────────
+    l = l.replace(/^(\s*)Set\s+/i, '$1');
+
+    // ── Call func(args) → func(args) ─────────────────────────────────────────
+    l = l.replace(/^(\s*)Call\s+/i, '$1');
+
+    // ── msgbox expr → alert(expr) ─────────────────────────────────────────────
     l = l.replace(/\bmsgbox\s+(.+)$/gi, (_, expr) => `alert(${expr.trim()})`);
+
+    // ── Statement-level literal + concat normalization ────────────────────────
+    l = vbLiterals(l);
+    l = l.replace(/\s+&\s+/g, ' + ');
 
     out.push(l);
   }

@@ -39,6 +39,10 @@ export default {
     // true = 不轉發瀏覽器的 Authorization header，改用 serviceAccount
     stripClientAuth: process.env.LEGACY_STRIP_AUTH === 'true',
 
+    // 當伺服器沒有在 Content-Type 或 <meta> 宣告 charset 時的預設編碼
+    // 例：'gb2312'、'gbk'、'big5'。留空 = 視為 UTF-8
+    defaultCharset: process.env.LEGACY_CHARSET || null,
+
     // service account 模式（stripClientAuth=true 時才需要）
     // serviceAccount: {
     //   type: 'basic',

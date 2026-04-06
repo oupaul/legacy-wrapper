@@ -62,10 +62,13 @@ function detectCharset(contentTypeHeader, buf) {
   // 2. BOM
   if (buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) return 'utf-8';
 
-  // 3. Sniff HTML <meta charset> from the first 1 KB (read as latin1 to preserve bytes)
-  const snippet = buf.slice(0, 1024).toString('latin1');
+  // 3. Sniff HTML <meta charset> from the first 4 KB (read as latin1 to preserve bytes)
+  const snippet = buf.slice(0, 4096).toString('latin1');
   const mm = snippet.match(/charset=["']?([\w-]+)/i);
   if (mm) return mm[1];
+
+  // 4. Config-level fallback (LEGACY_CHARSET env var)
+  if (config.auth?.defaultCharset) return config.auth.defaultCharset;
 
   return null;
 }
