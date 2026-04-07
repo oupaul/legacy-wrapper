@@ -306,6 +306,8 @@ function transpileVBScriptBlock(vbs) {
 // call these functions.  We inject them unconditionally so they're available
 // even on pages that have no inline VBScript blocks.
 const VB_GLOBALS_SCRIPT = `<script>
+/* IE named-element window access: expose document.forms[name] as window[name] */
+document.addEventListener('DOMContentLoaded',function(){var f=document.forms;for(var i=0;i<f.length;i++){if(f[i].name&&window[f[i].name]===undefined)window[f[i].name]=f[i];}});
 /* VBScript global function shims — always available on IE-era pages */
 if(typeof InStr==='undefined'){window.InStr=function(a,b){return typeof a==="number"?String(arguments[1]).indexOf(arguments[2])+1:String(a).indexOf(b)+1;};}
 if(typeof InStrRev==='undefined'){window.InStrRev=function(s,f){return String(s).lastIndexOf(f)+1;};}
