@@ -13,7 +13,11 @@ if (!config.allowedTargetHosts.includes(targetUrl.hostname)) {
 }
 
 // ── Serve injection assets ────────────────────────────────────────────────────
-app.use('/inject', express.static('./injector'));
+// No-store so browsers always fetch the latest shim files (avoids stale-cache bugs).
+app.use('/inject', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+}, express.static('./injector'));
 
 // ── Auth-aware reverse proxy (handles NTLM, Kerberos, Basic + HTML injection) ─
 app.use('/', createAuthProxy());

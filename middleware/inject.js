@@ -1,20 +1,23 @@
 import * as cheerio from 'cheerio';
 import { resolveFlags } from './rules.js';
 
+// Cache-bust version — increment this whenever shim files change so browsers
+// always fetch the latest version regardless of any cached copies.
+const SHIM_VER = 5;
+
 /**
  * Build the list of <script> / <link> tags to prepend based on active flags.
  */
 function buildTags(flags) {
   const tags = [];
+  const v = `?v=${SHIM_VER}`;
 
   if (flags.ieShim) {
-    tags.push('<script src="/inject/ie-shim.js"></script>');
+    tags.push(`<script src="/inject/ie-shim.js${v}"></script>`);
   }
-  if (flags.activexMock) {
-    tags.push('<script src="/inject/activex-mock.js"></script>');
-  }
+  // activex-mock.js is injected inline via ACTIVEX_INLINE_SCRIPT — no external tag needed
   if (flags.compatCss) {
-    tags.push('<link rel="stylesheet" href="/inject/compat.css">');
+    tags.push(`<link rel="stylesheet" href="/inject/compat.css${v}">`);
   }
 
   return tags.join('\n    ');
@@ -338,6 +341,41 @@ if(typeof Now==='undefined'){window.Now=function(){return new Date();};}
 if(typeof Date==='undefined'||typeof DateAdd==='undefined'){window.DateAdd=function(i,n,d){var r=new Date(d);if(i==='d')r.setDate(r.getDate()+n);return r;};}
 if(typeof FormatNumber==='undefined'){window.FormatNumber=function(n,d){return Number(n).toFixed(d===undefined?2:d);};}
 if(typeof FormatCurrency==='undefined'){window.FormatCurrency=function(n){return Number(n).toFixed(2);};}
+/* window.returnValue — IE dialog return value (set by popup before window.close()) */
+(function(){
+  var _rv;
+  Object.defineProperty(window,'returnValue',{get:function(){return _rv;},set:function(v){_rv=v;},configurable:true});
+  /* Override window.close() so popup pages send their returnValue to the opener */
+  if(window.opener){
+    var _origClose=window.close;
+    window.close=function(){
+      try{
+        if(_rv!==undefined){
+          window.opener.postMessage({__type:'__ieModalReturn',value:_rv},'*');
+        }
+      }catch(_){}
+      setTimeout(function(){try{_origClose.call(window);}catch(_e){window.location.href='about:blank';}},80);
+    };
+  }
+}());
+</script>`;
+
+// ── ActiveX / COM shims — inlined so browser cache of activex-mock.js is irrelevant ──
+// window.ActiveXObject is always overwritten (no guard) so the inline version
+// always wins over any cached external activex-mock.js that may still load later.
+const ACTIVEX_INLINE_SCRIPT = `<script>
+(function(){
+'use strict';
+function makeNode(n){if(!n)return null;var w={__isIENode:true,_native:n,nodeName:n.nodeName,nodeType:n.nodeType,nodeValue:n.nodeValue,get text(){return n.textContent||'';},set text(v){n.textContent=v;},get xml(){try{return new XMLSerializer().serializeToString(n);}catch(_){return '';}},get firstChild(){return makeNode(n.firstChild);},get lastChild(){return makeNode(n.lastChild);},get nextSibling(){return makeNode(n.nextSibling);},get previousSibling(){return makeNode(n.previousSibling);},get parentNode(){return makeNode(n.parentNode);},get childNodes(){return makeNodeList(n.childNodes);},getAttribute:function(a){return n.getAttribute(a);},setAttribute:function(a,v){n.setAttribute(a,v);},appendChild:function(c){return n.appendChild(c&&c._native?c._native:c);},removeChild:function(c){return n.removeChild(c&&c._native?c._native:c);},getElementsByTagName:function(t){return makeNodeList(n.getElementsByTagName(t));},selectSingleNode:function(x){try{var d=n.ownerDocument||n,r=d.evaluate(x,n,null,XPathResult.FIRST_ORDERED_NODE_TYPE,null);return makeNode(r.singleNodeValue);}catch(_){return null;}},selectNodes:function(x){try{var d=n.ownerDocument||n,r=d.evaluate(x,n,null,XPathResult.ANY_TYPE,null),nodes=[],v;while((v=r.iterateNext()))nodes.push(v);return makeStaticNodeList(nodes);}catch(_){return makeStaticNodeList([]);}}};return w;}
+function makeNodeList(l){var c=0,o={length:l.length,item:function(i){return makeNode(l.item(i));},reset:function(){c=0;}};Object.defineProperty(o,'nextNode',{get:function(){return c<l.length?makeNode(l.item(c++)):null;},configurable:true});return o;}
+function makeStaticNodeList(a){var c=0,o={length:a.length,item:function(i){return makeNode(a[i]);},reset:function(){c=0;}};Object.defineProperty(o,'nextNode',{get:function(){return c<a.length?makeNode(a[c++]):null;},configurable:true});return o;}
+function makeXmlDoc(init){var doc=init||document.implementation.createDocument(null,null,null),wrapper={__isIEXMLDOM:true,get _nativeDoc(){return doc;},parseError:{errorCode:0,reason:''},async:false,get documentElement(){return doc.documentElement?makeNode(doc.documentElement):null;},get xml(){try{return doc?new XMLSerializer().serializeToString(doc):'';}catch(_){return '';}},loadXML:function(s){var p=new DOMParser();doc=p.parseFromString(s==null?'<_empty/>':String(s),'text/xml');var e=doc.querySelector('parsererror');wrapper.parseError={errorCode:e?1:0,reason:e?e.textContent:''};},createElement:function(t){return doc?makeNode(doc.createElement(t)):null;},createTextNode:function(t){return doc?makeNode(doc.createTextNode(t)):null;},appendChild:function(c){if(!doc)return null;return doc.appendChild(c&&c._native?c._native:c);},getElementsByTagName:function(t){return doc?makeNodeList(doc.getElementsByTagName(t)):makeStaticNodeList([]);},selectNodes:function(x){if(!doc)return makeStaticNodeList([]);try{var r=doc.evaluate(x,doc,null,XPathResult.ANY_TYPE,null),nodes=[],nd;while((nd=r.iterateNext()))nodes.push(nd);return makeStaticNodeList(nodes);}catch(_){return makeStaticNodeList([]);}},selectSingleNode:function(x){if(!doc)return null;try{var r=doc.evaluate(x,doc,null,XPathResult.FIRST_ORDERED_NODE_TYPE,null);return makeNode(r.singleNodeValue);}catch(_){return null;}}};return wrapper;}
+function buildXmlHttp(){var xhr=new XMLHttpRequest(),shim={get readyState(){return xhr.readyState;},get status(){return xhr.status;},get statusText(){return xhr.statusText;},get responseText(){return xhr.responseText||'';},get responseXML(){var d=xhr.responseXML;if(!d&&xhr.responseText){try{d=new DOMParser().parseFromString(xhr.responseText,'text/xml');}catch(_){}}return d?makeXmlDoc(d):null;},onreadystatechange:null,open:function(m,u,a){xhr.open(m,u,a!==false);xhr.onreadystatechange=function(){if(typeof shim.onreadystatechange==='function')shim.onreadystatechange();};},setRequestHeader:function(n,v){try{xhr.setRequestHeader(n,v);}catch(_){}},getResponseHeader:function(n){return xhr.getResponseHeader(n);},getAllResponseHeaders:function(){return xhr.getAllResponseHeaders()||'';},abort:function(){xhr.abort();},send:function(b){var s=b;if(b&&typeof b==='object'&&b.__isIEXMLDOM){try{s=b.xml;}catch(_){}}if(b&&typeof b==='object'&&b.__isIENode&&b._native){try{s=new XMLSerializer().serializeToString(b._native);}catch(_){}}xhr.send(s!==undefined?s:null);}};return shim;}
+function buildNoop(id){return new Proxy({},{get:function(_,p){return function(){console.warn('[activex-mock] noop:',id,p);};}});}
+var _axo=function ActiveXObject(id){if(/XMLHTTP|Msxml2\\.XMLHTTP|Microsoft\\.XMLHTTP/i.test(id))return buildXmlHttp();if(/XMLDOM|DOMDocument/i.test(id))return makeXmlDoc(null);return buildNoop(id);};try{Object.defineProperty(window,'ActiveXObject',{value:_axo,writable:false,configurable:false,enumerable:true});}catch(_){window.ActiveXObject=_axo;}
+if(!window.CollectGarbage)window.CollectGarbage=function(){};
+if(!window.execScript)window.execScript=function(c){eval(c);};// eslint-disable-line no-eval
+}());
 </script>`;
 
 // ── Main injection entry point ────────────────────────────────────────────────
@@ -448,8 +486,54 @@ export function buildInjectedHtml(html, pathnameOrReq = '/') {
     }
   });
 
+  // ── Step 3b: Inject named-element globals before first external body script ──
+  // IE automatically exposed elements with name= (and no id=) as window globals.
+  // External scripts like _toolbar.js run during HTML parsing — BEFORE
+  // DOMContentLoaded — so they can't rely on the deferred shim in ie-shim.js.
+  // Solution: inject an inline <script> right before the first <script src=…>
+  // in <body> so that window.depJen etc. are available when those scripts load.
+  if (flags.ieShim) {
+    const seen = new Set();
+    const assignments = [];
+
+    // Named elements outside forms (direct body-level or in non-form containers)
+    $('body [name]').each((_, el) => {
+      const name  = $(el).attr('name');
+      const id    = $(el).attr('id');
+      const tag   = (el.tagName || '').toLowerCase();
+      if (!name || !/^\w+$/.test(name) || id || seen.has(name)) return;
+      // Skip form inputs — those are accessed via form.inputName, not window.inputName
+      if ($(el).closest('form').length) return;
+      seen.add(name);
+      const q = JSON.stringify(`[name=${JSON.stringify(name)}]`);
+      assignments.push(`if(window[${JSON.stringify(name)}]==null)` +
+                       `window[${JSON.stringify(name)}]=document.querySelector(${q});`);
+    });
+
+    // Forms by name (IE: window.formName = formElement)
+    $('body form[name]').each((_, el) => {
+      const name = $(el).attr('name');
+      const id   = $(el).attr('id');
+      if (!name || !/^\w+$/.test(name) || id || seen.has(name)) return;
+      seen.add(name);
+      assignments.push(`if(window[${JSON.stringify(name)}]==null)` +
+                       `window[${JSON.stringify(name)}]=document.forms[${JSON.stringify(name)}];`);
+    });
+
+    if (assignments.length > 0) {
+      const inlineScript = `<script>${assignments.join('')}</script>`;
+      const firstBodyExtScript = $('body script[src]').first();
+      if (firstBodyExtScript.length) {
+        firstBodyExtScript.before(inlineScript);
+      } else {
+        $('body').prepend(inlineScript);
+      }
+    }
+  }
+
   // ── Step 4: Inject shim <script>/<link> tags into <head> ──────────────────
-  const headContent = (flags.ieShim ? VB_GLOBALS_SCRIPT + '\n    ' : '') + (tags || '');
+  const activexInline = flags.activexMock ? ACTIVEX_INLINE_SCRIPT + '\n    ' : '';
+  const headContent = (flags.ieShim ? VB_GLOBALS_SCRIPT + '\n    ' : '') + activexInline + (tags || '');
   if (headContent.trim()) {
     if ($('head').length) {
       $('head').prepend('\n    ' + headContent + '\n  ');

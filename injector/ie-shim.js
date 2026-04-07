@@ -153,11 +153,21 @@
   // has a matching element ID.  Also explicitly re-fix ToolbarMenu.
   document.addEventListener('DOMContentLoaded', function fixElementIdGlobals() {
     try {
+      // Expose elements by id as window globals (IE named-access behaviour).
       var allEls = document.querySelectorAll('[id]');
       for (var i = 0; i < allEls.length; i++) {
         var eid = allEls[i].id;
         if (eid && /^\w+$/.test(eid) && window[eid] == null) {
           try { window[eid] = allEls[i]; } catch (_) {}
+        }
+      }
+      // Also expose named inputs/selects that have no id (IE also tracked these as
+      // window globals, e.g. <input name="depJen"> → window.depJen).
+      var namedEls = document.querySelectorAll('input[name],select[name],textarea[name]');
+      for (var j = 0; j < namedEls.length; j++) {
+        var nm = namedEls[j].name;
+        if (nm && /^\w+$/.test(nm) && !namedEls[j].id && window[nm] == null) {
+          try { window[nm] = namedEls[j]; } catch (_) {}
         }
       }
       // ToolbarMenu was set to StartMenu *before* the element existed.
@@ -318,11 +328,49 @@
   if (!window.navigate) {
     window.navigate = function (url) { window.location.href = url; };
   }
-  // window.showModalDialog — used by some legacy dialogs; open as popup fallback.
+  // window.showModalDialog — IE synchronous modal dialog.
+  // Chrome dropped this API.  We open a popup and wire up a postMessage bridge
+  // so that when the dialog page sets window.returnValue and calls window.close(),
+  // the value is delivered back to the opener via a 'message' event.
+  //
+  // NOTE: Because JS is single-threaded we cannot block the caller synchronously,
+  // so showModalDialog returns undefined immediately.  For the multi-result case
+  // (where the caller tries to parse the return value) the form fields won't
+  // auto-fill; users should instead type enough to get a single match.
+  // The single-result path (most common) works fully via the XMLHTTP shim.
   if (!window.showModalDialog) {
     window.showModalDialog = function (url, arg, features) {
-      return window.open(url, '_blank', 'width=600,height=400');
+      // Parse IE dialogWidth / dialogHeight feature string → Chrome features
+      var w = 600, h = 400;
+      if (typeof features === 'string') {
+        var wm = /dialogwidth\s*[:=]\s*(\d+)/i.exec(features);
+        var hm = /dialogheight\s*[:=]\s*(\d+)/i.exec(features);
+        if (wm) w = parseInt(wm[1], 10);
+        if (hm) h = parseInt(hm[1], 10);
+      }
+      var left = Math.max(0, Math.round((screen.width  - w) / 2));
+      var top  = Math.max(0, Math.round((screen.height - h) / 2));
+      window.open(url, '_ieModalDialog',
+        'width=' + w + ',height=' + h +
+        ',left=' + left + ',top=' + top +
+        ',toolbar=no,location=no,directories=no,status=no' +
+        ',menubar=no,scrollbars=yes,resizable=yes');
+      // Can't return synchronously — async result handled via the message event.
+      return undefined;
     };
+
+    // When the dialog calls window.returnValue = x; window.close(), our injected
+    // close-override (see inject.js) postMessages the returnValue here.
+    // Handlers can set window.__onModalDialogReturn = function(xmlStr) { … };
+    window.addEventListener('message', function (e) {
+      if (!e.data || e.data.__type !== '__ieModalReturn') return;
+      var retVal = e.data.value;
+      console.info('[ie-shim] showModalDialog return value received');
+      if (typeof window.__onModalDialogReturn === 'function') {
+        window.__onModalDialogReturn(retVal);
+        window.__onModalDialogReturn = null;
+      }
+    });
   }
   // document.frames — IE alias for window.frames
   if (!document.frames) {

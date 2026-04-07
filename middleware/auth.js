@@ -377,6 +377,15 @@ function forwardRequest(req, res) {
           }
 
           res.removeHeader('content-length');
+          if (needsInject) {
+            res.setHeader('Cache-Control', 'no-store');
+            // Clear-Site-Data forces the browser to discard ALL cached resources
+            // for this origin (JS, CSS, HTML).  Sent on every injected HTML
+            // response until the transition period ends (2026-04-30).
+            if (Date.now() < Date.UTC(2026, 3, 30)) {
+              res.setHeader('Clear-Site-Data', '"cache"');
+            }
+          }
           res.end(text);
           resolve();
         });
