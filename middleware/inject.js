@@ -3,7 +3,7 @@ import { resolveFlags } from './rules.js';
 
 // Cache-bust version — increment this whenever shim files change so browsers
 // always fetch the latest version regardless of any cached copies.
-const SHIM_VER = 6;
+const SHIM_VER = 7;
 
 /**
  * Build the list of <script> / <link> tags to prepend based on active flags.

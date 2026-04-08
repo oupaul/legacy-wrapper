@@ -389,5 +389,50 @@
     window.ScriptEngine             = function () { return 'JScript'; };
   }
 
+  // ── ASP.NET AJAX Sys._ScriptLoader null-task patch ──────────────────────────
+  // MicrosoftAjax.js (ScriptResource.axd) _scriptLoadedHandler has a race
+  // condition: it sets _currentSessionTasks[i] = null, then in the same method
+  // loops over the array and reads ._notified — crashing on the null entry.
+  // IE was forgiving; Chrome throws TypeError, breaking the UpdatePanel script
+  // pipeline (including any subsequent window.showModalDialog call).
+  //
+  // Fix: before the original method runs, replace null entries with
+  // { _notified: true } so the loop treats them as already-completed tasks.
+  (function patchSysScriptLoader() {
+    function applyPatch() {
+      if (!window.Sys || !Sys._ScriptLoader) return false;
+      var proto = Sys._ScriptLoader.prototype;
+      var key = 'Sys$_ScriptLoader$_scriptLoadedHandler';
+      if (!proto[key] || proto[key].__patched) return true; // already done
+      var orig = proto[key];
+      proto[key] = function () {
+        if (this._currentSessionTasks) {
+          for (var i = 0; i < this._currentSessionTasks.length; i++) {
+            if (this._currentSessionTasks[i] === null) {
+              this._currentSessionTasks[i] = { _notified: true };
+            }
+          }
+        }
+        return orig.apply(this, arguments);
+      };
+      proto[key].__patched = true;
+      console.info('[ie-shim] Sys._ScriptLoader null-task patch applied');
+      return true;
+    }
+
+    if (!applyPatch()) {
+      // Sys._ScriptLoader is defined by ScriptResource.axd which loads async;
+      // poll briefly after DOMContentLoaded until it is available.
+      document.addEventListener('DOMContentLoaded', function () {
+        if (!applyPatch()) {
+          var attempts = 0;
+          var timer = setInterval(function () {
+            if (applyPatch() || ++attempts > 30) clearInterval(timer);
+          }, 100);
+        }
+      });
+    }
+  }());
+
   console.info('[ie-shim] IE compatibility shims applied.');
 }());
