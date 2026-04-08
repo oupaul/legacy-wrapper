@@ -96,17 +96,22 @@ function matchRoute(urlPath) {
   return null;
 }
 
+// 所有替換對應表（主 origin + 額外 routes），依 origin 長度降序排列。
+// 必須長的先替換，否則短字串是長字串的前綴時會造成部分取代：
+//   e.g. upstreamOrigin = http://server  先替換 http://server:6080
+//        → http://proxy:6080（格式損壞），後續 route 替換就找不到原字串了。
+const _urlRewriteTable = [
+  { origin: upstreamOrigin, replacement: proxyPublicUrl || '' },
+  ...rewriteRoutes.map(r => ({
+    origin:      r.origin,
+    replacement: (proxyPublicUrl || '') + r.prefix,
+  })),
+].sort((a, b) => b.origin.length - a.origin.length);
+
 function rewriteUrls(text) {
   if (!proxyPublicUrl) return text;
-  // 主 target origin → proxyPublicUrl（無前綴）
-  if (text.includes(upstreamOrigin)) {
-    text = text.replaceAll(upstreamOrigin, proxyPublicUrl);
-  }
-  // 額外 origin → proxyPublicUrl + prefix
-  for (const route of rewriteRoutes) {
-    if (text.includes(route.origin)) {
-      text = text.replaceAll(route.origin, proxyPublicUrl + route.prefix);
-    }
+  for (const { origin, replacement } of _urlRewriteTable) {
+    if (text.includes(origin)) text = text.replaceAll(origin, replacement);
   }
   return text;
 }
@@ -242,13 +247,16 @@ function forwardRequest(req, res) {
 
       // Rewrite Referer / Origin so the upstream sees its own domain,
       // not the proxy URL. Some servers reject requests with foreign Referer.
+      // Reverse the rewriteUrls() transform: proxyPublicUrl[+prefix] → origin.
+      // Use the same sorted table in REVERSE so longer replacements win.
       if (proxyPublicUrl && (lower === 'referer' || lower === 'origin')) {
-        // Replace proxyPublicUrl + route.prefix → fwdOrigin
         let val = v;
-        if (activeRoute) {
-          val = val.replace(proxyPublicUrl + activeRoute.prefix, fwdOrigin);
+        for (const { origin, replacement } of _urlRewriteTable) {
+          if (val.includes(replacement)) {
+            val = val.replaceAll(replacement, origin);
+            break; // only one match expected
+          }
         }
-        val = val.replace(proxyPublicUrl, upstreamOrigin);
         headers[k] = val;
         continue;
       }
@@ -367,15 +375,14 @@ function forwardRequest(req, res) {
           const lower = k.toLowerCase();
           if (HOP_BY_HOP_RES.has(lower)) continue;
 
-          // Rewrite Location redirect to go through proxy
-          // Main origin → proxyPublicUrl; extra origins → proxyPublicUrl + prefix
+          // Rewrite Location redirect to go through proxy.
+          // Use the same sorted table as rewriteUrls() — longest origin first —
+          // so http://server:6080 is matched before http://server.
           if (lower === 'location' && proxyPublicUrl) {
             const rewritten = (Array.isArray(v) ? v : [v]).map(url => {
-              if (url.startsWith(upstreamOrigin))
-                return proxyPublicUrl + url.slice(upstreamOrigin.length);
-              for (const route of rewriteRoutes) {
-                if (url.startsWith(route.origin))
-                  return proxyPublicUrl + route.prefix + url.slice(route.origin.length);
+              for (const { origin, replacement } of _urlRewriteTable) {
+                if (url.startsWith(origin))
+                  return replacement + url.slice(origin.length);
               }
               return url;
             });
