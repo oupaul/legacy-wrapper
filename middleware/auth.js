@@ -45,15 +45,68 @@ const proxyPublicUrl = config.proxyUrl
   ? config.proxyUrl.replace(/\/$/, '')   // 去尾部斜線
   : null;
 
-// 所有需要被替換成 proxyPublicUrl 的上游 origin：
-//   主 target origin + config.rewriteOrigins 列出的額外 origin
-const allRewriteOrigins = proxyPublicUrl
-  ? [upstreamOrigin, ...(config.rewriteOrigins || [])]
-  : [];
+// ── 額外上游 origin 路由表 ─────────────────────────────────────────────────
+// config.rewriteOrigins 中的每個 entry 被正規化為：
+//   { origin, prefix, hostname, port, isHttps }
+//
+// 路徑前綴規則：
+//   http://server:6080/some/page → /~6080/some/page（前綴 = /~<port>）
+//   請求到 /~6080/some/page 時，proxy 剝除前綴並轉發到 http://server:6080/some/page
+//
+// 這樣同一個 proxy 實例可以代理多個不同 port 的上游，無需額外 PM2 實例。
+const rewriteRoutes = (config.rewriteOrigins || []).map(entry => {
+  const originStr = (typeof entry === 'string' ? entry : entry.origin).replace(/\/$/, '');
+  const originUrl = new URL(originStr);
+  const routePort = originUrl.port
+    ? parseInt(originUrl.port, 10)
+    : (originUrl.protocol === 'https:' ? 443 : 80);
+
+  // 允許手動指定前綴；預設用 /~<port>
+  const prefix = (typeof entry === 'object' && entry.prefix)
+    ? entry.prefix.replace(/\/$/, '')
+    : `/~${routePort}`;
+
+  // 允許手動指定不同的轉發目標；預設就是 origin 本身
+  const targetStr = (typeof entry === 'object' && entry.target)
+    ? entry.target.replace(/\/$/, '')
+    : originStr;
+  const tUrl = new URL(targetStr);
+  const tPort = tUrl.port
+    ? parseInt(tUrl.port, 10)
+    : (tUrl.protocol === 'https:' ? 443 : 80);
+
+  return {
+    origin:    originStr,          // 要替換的來源 origin
+    prefix,                        // URL 前綴（e.g. /~6080）
+    hostname:  tUrl.hostname,
+    port:      tPort,
+    isHttps:   tUrl.protocol === 'https:',
+    host:      tUrl.host,          // hostname:port 或純 hostname
+  };
+});
+
+// 將請求路徑對應到 rewriteRoute（若路徑以 route.prefix 開頭）
+function matchRoute(urlPath) {
+  for (const route of rewriteRoutes) {
+    if (urlPath === route.prefix || urlPath.startsWith(route.prefix + '/') ||
+        urlPath.startsWith(route.prefix + '?')) {
+      return route;
+    }
+  }
+  return null;
+}
 
 function rewriteUrls(text) {
-  for (const origin of allRewriteOrigins) {
-    if (text.includes(origin)) text = text.replaceAll(origin, proxyPublicUrl);
+  if (!proxyPublicUrl) return text;
+  // 主 target origin → proxyPublicUrl（無前綴）
+  if (text.includes(upstreamOrigin)) {
+    text = text.replaceAll(upstreamOrigin, proxyPublicUrl);
+  }
+  // 額外 origin → proxyPublicUrl + prefix
+  for (const route of rewriteRoutes) {
+    if (text.includes(route.origin)) {
+      text = text.replaceAll(route.origin, proxyPublicUrl + route.prefix);
+    }
   }
   return text;
 }
@@ -165,6 +218,21 @@ function shouldPassClientAuth() {
 
 function forwardRequest(req, res) {
   return new Promise((resolve, reject) => {
+    // Detect route prefix in the request path (e.g. /~6080/some/page)
+    const activeRoute = matchRoute(req.url);
+    // Strip the prefix from the path before forwarding
+    const upstreamPath = activeRoute
+      ? (req.url.slice(activeRoute.prefix.length) || '/')
+      : req.url;
+    // Select the correct upstream target for this request
+    const fwdHostname   = activeRoute ? activeRoute.hostname   : targetUrl.hostname;
+    const fwdPort       = activeRoute ? activeRoute.port       : upstreamPort;
+    const fwdHttpModule = activeRoute
+      ? (activeRoute.isHttps ? https : http)
+      : httpModule;
+    const fwdOrigin     = activeRoute ? activeRoute.origin     : upstreamOrigin;
+    const fwdHost       = activeRoute ? activeRoute.host       : targetUrl.host;
+
     // Build forwarded headers
     const headers = {};
     for (const [k, v] of Object.entries(req.headers)) {
@@ -175,13 +243,19 @@ function forwardRequest(req, res) {
       // Rewrite Referer / Origin so the upstream sees its own domain,
       // not the proxy URL. Some servers reject requests with foreign Referer.
       if (proxyPublicUrl && (lower === 'referer' || lower === 'origin')) {
-        headers[k] = v.replace(proxyPublicUrl, upstreamOrigin);
+        // Replace proxyPublicUrl + route.prefix → fwdOrigin
+        let val = v;
+        if (activeRoute) {
+          val = val.replace(proxyPublicUrl + activeRoute.prefix, fwdOrigin);
+        }
+        val = val.replace(proxyPublicUrl, upstreamOrigin);
+        headers[k] = val;
         continue;
       }
 
       headers[k] = v;
     }
-    headers['host'] = targetUrl.host;
+    headers['host'] = fwdHost;
 
     maybeAddServiceAuth(headers);
 
@@ -246,16 +320,16 @@ function forwardRequest(req, res) {
       }
 
       const options = {
-        hostname: targetUrl.hostname,
-        port:     upstreamPort,
-        path:     req.url,
+        hostname: fwdHostname,
+        port:     fwdPort,
+        path:     upstreamPath,
         method:   req.method,
         headers,
         agent:    agentFor(req.socket),   // ← NTLM connection binding
         timeout:  (config.auth?.timeoutMs ?? 30_000),
       };
 
-      const upReq = httpModule.request(options, upRes => {
+      const upReq = fwdHttpModule.request(options, upRes => {
         const status      = upRes.statusCode;
         const contentType = upRes.headers['content-type'] || '';
         const isHtml      = contentType.includes('text/html');
@@ -294,11 +368,14 @@ function forwardRequest(req, res) {
           if (HOP_BY_HOP_RES.has(lower)) continue;
 
           // Rewrite Location redirect to go through proxy
-          // Covers all origins in allRewriteOrigins (main + extras)
+          // Main origin → proxyPublicUrl; extra origins → proxyPublicUrl + prefix
           if (lower === 'location' && proxyPublicUrl) {
             const rewritten = (Array.isArray(v) ? v : [v]).map(url => {
-              for (const origin of allRewriteOrigins) {
-                if (url.startsWith(origin)) return proxyPublicUrl + url.slice(origin.length);
+              if (url.startsWith(upstreamOrigin))
+                return proxyPublicUrl + url.slice(upstreamOrigin.length);
+              for (const route of rewriteRoutes) {
+                if (url.startsWith(route.origin))
+                  return proxyPublicUrl + route.prefix + url.slice(route.origin.length);
               }
               return url;
             });

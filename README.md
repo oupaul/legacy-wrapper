@@ -47,15 +47,24 @@ legacy-wrapper/
 
 ### Extra origin rewriting (`rewriteOrigins`)
 
-Some legacy pages hardcode absolute URLs pointing to the same server but on a different port (e.g. `:6080`). These links bypass the proxy when followed by the browser because they don't match `proxyUrl`'s single upstream origin.
+Some legacy pages hardcode absolute URLs pointing to the same server on a **different port** (e.g. `:6080`). Without special handling these links bypass the proxy and the browser is sent directly to the old server.
 
-Add those origins to `rewriteOrigins` and they will be rewritten to `proxyUrl` in HTML/JS/CSS responses **and** in `Location` redirect headers:
+`rewriteOrigins` solves this with a **path-prefix routing** strategy:
+
+| Step | What happens |
+|------|--------------|
+| 1 | `http://server:6080/page` in the HTML is rewritten to `https://proxy/~6080/page` |
+| 2 | Browser requests `GET /~6080/page` from the proxy |
+| 3 | Proxy strips the `/~6080` prefix and forwards to `http://server:6080/page` |
+| 4 | Response is injected with shims and returned to the browser |
+
+No second PM2 instance needed — a single proxy handles multiple upstream ports.
 
 ```js
 // config.js
 rewriteOrigins: [
-  'http://192.168.1.100:6080',   // same server, different port
-  'http://legacy.internal:8080', // alternate hostname
+  'http://192.168.1.100:6080',   // → path prefix /~6080, target http://192.168.1.100:6080
+  'http://legacy.internal:8080', // → path prefix /~8080, target http://legacy.internal:8080
 ],
 ```
 
@@ -64,6 +73,14 @@ Or via environment variable (comma-separated):
 ```bash
 REWRITE_ORIGINS=http://192.168.1.100:6080,http://legacy.internal:8080 \
 pm2 restart my-legacy-app
+```
+
+Advanced — custom prefix or different target:
+
+```js
+rewriteOrigins: [
+  { origin: 'http://server:6080', prefix: '/reports', target: 'http://server:6080' },
+],
 ```
 
 > `proxyUrl` (the main target origin) is always rewritten — no need to repeat it here.
