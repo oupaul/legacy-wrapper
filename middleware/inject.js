@@ -420,6 +420,16 @@ export function buildInjectedHtml(html, pathnameOrReq = '/') {
       $(el).removeAttr('type');
       $(el).html(js);
       console.info('[inject] VBScript transpiled — subs:', subNames.join(', '));
+    } else if (!$(el).attr('src')) {
+      // Sanitize JS blocks: replace full-width curly brackets typed in Chinese
+      // input mode (﹛ U+FE5B, ﹜ U+FE5C, ｛ U+FF5B, ｝ U+FF5D) with ASCII
+      // equivalents. These cause SyntaxErrors that prevent the whole block from
+      // executing (e.g. "Unexpected end of input").
+      const raw = $(el).html() || '';
+      const sanitized = raw
+        .replace(/\uFE5B|\uFF5B/g, '{')
+        .replace(/\uFE5C|\uFF5D/g, '}');
+      if (sanitized !== raw) $(el).html(sanitized);
     }
   });
 
@@ -549,5 +559,11 @@ export function buildInjectedHtml(html, pathnameOrReq = '/') {
     }
   }
 
-  return $.html();
+  // Remove trailing orphaned <html><script>...</script> blocks that Classic ASP
+  // pages sometimes emit after </body></html>. These contain only whitespace but
+  // leave an unclosed <script> that triggers "Unexpected end of input".
+  let out = $.html();
+  out = out.replace(/<html\s*>\s*<script[^>]*>[\s\S]*?<\/script>\s*<\/html\s*>/gi, '');
+  out = out.replace(/<html\s*>\s*<script[^>]*>[\s\S]*$/i, '');
+  return out;
 }
