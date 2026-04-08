@@ -59,6 +59,19 @@ export default {
   //   例：http://10.201.15.31:3001
   proxyUrl: process.env.PROXY_PUBLIC_URL || null,
 
+  // 額外需要被替換的上游 origin 清單（當頁面裡出現不同 port 或不同 hostname 的連結時使用）。
+  // 每個值的格式同 proxyUrl：scheme + host + port，不含尾部斜線。
+  //
+  // 環境變數 REWRITE_ORIGINS：逗號分隔
+  //   例：REWRITE_ORIGINS=http://192.168.1.100:6080,http://legacy.internal:8080
+  //
+  // 或直接在這裡手動列出：
+  //   rewriteOrigins: ['http://192.168.1.100:6080'],
+  rewriteOrigins: (process.env.REWRITE_ORIGINS || '')
+    .split(',')
+    .map(s => s.trim().replace(/\/$/, ''))
+    .filter(Boolean),
+
   // ── 注入規則 ──────────────────────────────────────────────────────────────
   rulesMode: 'merge',   // 'merge' | 'first'
 

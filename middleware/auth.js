@@ -45,9 +45,17 @@ const proxyPublicUrl = config.proxyUrl
   ? config.proxyUrl.replace(/\/$/, '')   // 去尾部斜線
   : null;
 
+// 所有需要被替換成 proxyPublicUrl 的上游 origin：
+//   主 target origin + config.rewriteOrigins 列出的額外 origin
+const allRewriteOrigins = proxyPublicUrl
+  ? [upstreamOrigin, ...(config.rewriteOrigins || [])]
+  : [];
+
 function rewriteUrls(text) {
-  if (!proxyPublicUrl) return text;
-  return text.replaceAll(upstreamOrigin, proxyPublicUrl);
+  for (const origin of allRewriteOrigins) {
+    if (text.includes(origin)) text = text.replaceAll(origin, proxyPublicUrl);
+  }
+  return text;
 }
 
 // ── Charset detection ─────────────────────────────────────────────────────────
@@ -286,10 +294,14 @@ function forwardRequest(req, res) {
           if (HOP_BY_HOP_RES.has(lower)) continue;
 
           // Rewrite Location redirect to go through proxy
+          // Covers all origins in allRewriteOrigins (main + extras)
           if (lower === 'location' && proxyPublicUrl) {
-            const rewritten = (Array.isArray(v) ? v : [v]).map(url =>
-              url.startsWith(upstreamOrigin) ? proxyPublicUrl + url.slice(upstreamOrigin.length) : url
-            );
+            const rewritten = (Array.isArray(v) ? v : [v]).map(url => {
+              for (const origin of allRewriteOrigins) {
+                if (url.startsWith(origin)) return proxyPublicUrl + url.slice(origin.length);
+              }
+              return url;
+            });
             res.setHeader(k, rewritten.length === 1 ? rewritten[0] : rewritten);
             continue;
           }

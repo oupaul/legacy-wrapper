@@ -41,8 +41,32 @@ legacy-wrapper/
 | `auth.stripClientAuth` | `false` | Replace browser credentials with `serviceAccount` |
 | `auth.defaultCharset` | `null` | Fallback charset when backend omits it (e.g. `gb2312`) |
 | `proxyUrl` | `null` | Public proxy URL for absolute-URL rewriting |
+| `rewriteOrigins` | `[]` | Extra upstream origins to rewrite (see below) |
 | `rules` | `[]` | Per-path injection overrides (see below) |
 | `allowedTargetHosts` | auto | Security allowlist (auto-includes target hostname) |
+
+### Extra origin rewriting (`rewriteOrigins`)
+
+Some legacy pages hardcode absolute URLs pointing to the same server but on a different port (e.g. `:6080`). These links bypass the proxy when followed by the browser because they don't match `proxyUrl`'s single upstream origin.
+
+Add those origins to `rewriteOrigins` and they will be rewritten to `proxyUrl` in HTML/JS/CSS responses **and** in `Location` redirect headers:
+
+```js
+// config.js
+rewriteOrigins: [
+  'http://192.168.1.100:6080',   // same server, different port
+  'http://legacy.internal:8080', // alternate hostname
+],
+```
+
+Or via environment variable (comma-separated):
+
+```bash
+REWRITE_ORIGINS=http://192.168.1.100:6080,http://legacy.internal:8080 \
+pm2 restart my-legacy-app
+```
+
+> `proxyUrl` (the main target origin) is always rewritten — no need to repeat it here.
 
 ### Per-path injection rules
 
