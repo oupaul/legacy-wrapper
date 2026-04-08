@@ -543,6 +543,31 @@ export function buildInjectedHtml(html, pathnameOrReq = '/') {
     }
   }
 
+  // ── Step 3c: Pre-mark form-owned inputs with data-form-id ────────────────────
+  // HTML5 browsers "foster" <form> elements that appear inside <table>/<tr>,
+  // moving the form before the table while leaving its inputs orphaned inside.
+  // cheerio (htmlparser2) does NOT foster, so it still sees the original
+  // form→input hierarchy.  We annotate every input with its form's id here so
+  // ie-shim.js can restore the associations after the browser has parsed the
+  // page without relying on fragile positional matching.
+  if (flags.ieShim) {
+    $('form').each((_, formEl) => {
+      // Ensure the form has an id (required by the HTML form= attribute).
+      let formId = $(formEl).attr('id');
+      if (!formId) {
+        const formName = $(formEl).attr('name');
+        if (formName && /^\w+$/.test(formName)) {
+          formId = formName;
+          $(formEl).attr('id', formName);
+        }
+      }
+      if (!formId) return;
+      $(formEl).find('input, select, textarea').each((_, inputEl) => {
+        $(inputEl).attr('data-form-id', formId);
+      });
+    });
+  }
+
   // ── Step 4: Inject shim <script>/<link> tags into <head> ──────────────────
   const activexInline = flags.activexMock ? ACTIVEX_INLINE_SCRIPT + '\n    ' : '';
   const headContent = (flags.ieShim ? VB_GLOBALS_SCRIPT + '\n    ' : '') + activexInline + (tags || '');
