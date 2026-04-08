@@ -59,12 +59,103 @@ rules: [
 
 ## Deployment (PM2)
 
+### Install PM2
+
+PM2 is not listed as a project dependency — install it globally once on the server:
+
 ```bash
+npm install -g pm2
+```
+
+Verify:
+
+```bash
+pm2 --version
+```
+
+### First-time start
+
+```bash
+cd ~/legacy-wrapper
+
 PORT=3001 \
 LEGACY_TARGET=http://192.168.1.100:88 \
 PROXY_PUBLIC_URL=http://10.0.0.1:3001 \
 LEGACY_CHARSET=gb2312 \
 pm2 start server.js --name my-legacy-app
+```
+
+Environment variables can also be written into an `ecosystem.config.cjs` file so you don't have to repeat them on every restart:
+
+```js
+// ecosystem.config.cjs
+module.exports = {
+  apps: [{
+    name: 'my-legacy-app',
+    script: './server.js',
+    env: {
+      PORT:             '3001',
+      LEGACY_TARGET:    'http://192.168.1.100:88',
+      PROXY_PUBLIC_URL: 'http://10.0.0.1:3001',
+      LEGACY_CHARSET:   'gb2312',
+    },
+  }],
+};
+```
+
+```bash
+pm2 start ecosystem.config.cjs
+```
+
+### Autostart on reboot
+
+After the process is running, save the process list and generate a systemd startup hook:
+
+```bash
+pm2 save                   # save current process list
+pm2 startup                # prints a command to run as root — copy-paste and run it
+```
+
+The `pm2 startup` command prints something like:
+
+```
+[PM2] To setup the Startup Script, copy/paste the following command:
+sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u ubuntu --hp /home/ubuntu
+```
+
+Run that printed command once. From that point forward, PM2 (and all saved processes) will restart automatically after a reboot.
+
+### Day-to-day management
+
+| Task | Command |
+|------|---------|
+| List all processes | `pm2 list` |
+| View live logs | `pm2 logs my-legacy-app` |
+| View last N log lines | `pm2 logs my-legacy-app --lines 50 --nostream` |
+| Restart (after `git pull`) | `pm2 restart my-legacy-app` |
+| Reload with zero downtime | `pm2 reload my-legacy-app` |
+| Stop | `pm2 stop my-legacy-app` |
+| Delete from PM2 registry | `pm2 delete my-legacy-app` |
+| Show process detail | `pm2 show my-legacy-app` |
+| Monitor CPU / memory | `pm2 monit` |
+
+### Deploy update from Git
+
+```bash
+cd ~/legacy-wrapper
+git pull
+pm2 restart my-legacy-app   # or: pm2 reload my-legacy-app (zero-downtime)
+```
+
+### Log rotation (optional)
+
+PM2 log files grow unbounded by default.  Install the log-rotation module once:
+
+```bash
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 20M
+pm2 set pm2-logrotate:retain 7
+pm2 set pm2-logrotate:compress true
 ```
 
 ### Nginx reverse proxy (recommended)
