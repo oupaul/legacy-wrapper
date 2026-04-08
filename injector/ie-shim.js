@@ -321,8 +321,8 @@
   // (where the caller tries to parse the return value) the form fields won't
   // auto-fill; users should instead type enough to get a single match.
   // The single-result path (most common) works fully via the XMLHTTP shim.
-  if (!window.showModalDialog) {
-    window.showModalDialog = function (url, arg, features) {
+  if (typeof window.showModalDialog !== 'function') {
+    var _smd = function showModalDialog(url, arg, features) {
       // Parse IE dialogWidth / dialogHeight feature string → Chrome features
       var w = 600, h = 400;
       if (typeof features === 'string') {
@@ -341,6 +341,16 @@
       // Can't return synchronously — async result handled via the message event.
       return undefined;
     };
+    // Lock with Object.defineProperty so ASP.NET AJAX (ScriptResource.axd) and
+    // other scripts that reset window.showModalDialog = null/undefined cannot
+    // clobber this polyfill after it has been installed.
+    try {
+      Object.defineProperty(window, 'showModalDialog', {
+        value: _smd, writable: false, configurable: false, enumerable: true,
+      });
+    } catch (_) {
+      window.showModalDialog = _smd;
+    }
 
     // When the dialog calls window.returnValue = x; window.close(), our injected
     // close-override (see inject.js) postMessages the returnValue here.
