@@ -12,6 +12,12 @@ const targetHostname = (() => {
   try { return new URL(target).hostname; } catch { return ''; }
 })();
 
+// 從 REWRITE_ORIGINS 提取 hostname，也自動加入 allowlist
+const rewriteOriginHostnames = (process.env.REWRITE_ORIGINS || '')
+  .split(',')
+  .map(s => { try { return new URL(s.trim()).hostname; } catch { return ''; } })
+  .filter(Boolean);
+
 export default {
   // 代理目標（舊系統網址）
   target,
@@ -80,9 +86,10 @@ export default {
   ],
 
   // ── 安全 allowlist ────────────────────────────────────────────────────────
-  // target hostname 自動加入；如需額外允許其他 host 手動追加
+  // target hostname 與 rewriteOrigins 的 hostname 自動加入；如需額外允許手動追加
   allowedTargetHosts: [
     targetHostname,
+    ...rewriteOriginHostnames,
     // '192.168.1.100',
   ].filter(Boolean),
 };
